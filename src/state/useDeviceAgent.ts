@@ -38,14 +38,35 @@ export function useDeviceAgent() {
       return;
     }
 
+    const pushLine = (message: string) => {
+      const lines = outputRef.current
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+
+      if (message.startsWith('Downloading model')) {
+        if (lines.length > 0 && lines[lines.length - 1].startsWith('Downloading model')) {
+          lines[lines.length - 1] = message;
+        } else {
+          lines.push(message);
+        }
+      } else {
+        lines.push(message);
+      }
+
+      // Keep log size reasonable
+      const capped = lines.slice(-200);
+      outputRef.current = `${capped.join('\n')}\n`;
+    };
+
     unsubRef.current = subscribeAgentEvents(
       message => {
-        outputRef.current += `${message}\n`;
+        pushLine(message);
         setState({phase: 'running', output: outputRef.current});
       },
       message => {
         if (message) {
-          outputRef.current += `${message}\n`;
+          pushLine(message);
         }
         setState({phase: 'done', output: outputRef.current});
         cleanup();
