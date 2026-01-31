@@ -74,7 +74,13 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
         sendEvent(EVENT_LOG, "Agent started")
         ensureModelReady()
 
-        val maxSteps = 8
+        if (shouldOpenSettings(goal)) {
+          sendEvent(EVENT_LOG, "Shortcut: opening Settings")
+          openSettings()
+          delay(800)
+        }
+
+        val maxSteps = 3
         for (step in 1..maxSteps) {
           sendEvent(EVENT_LOG, "Step $step/$maxSteps: scanning screen")
           val service = AgentAccessibilityService.instance
@@ -261,6 +267,25 @@ JSON:
           JSONObject("""{"action":"wait","reason":"Could not parse response"}""")
         }
       }
+    }
+  }
+
+  private fun shouldOpenSettings(goal: String): Boolean {
+    val lower = goal.lowercase()
+    return lower.contains("settings") ||
+      lower.contains("bluetooth") ||
+      lower.contains("wi-fi") ||
+      lower.contains("wifi")
+  }
+
+  private fun openSettings() {
+    try {
+      val intent = android.content.Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+      }
+      reactContext.startActivity(intent)
+    } catch (e: Exception) {
+      sendEvent(EVENT_LOG, "Failed to open Settings: ${e.message}")
     }
   }
 
