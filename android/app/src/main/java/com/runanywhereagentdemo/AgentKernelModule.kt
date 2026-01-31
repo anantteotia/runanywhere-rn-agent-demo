@@ -119,9 +119,13 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
       sendEvent(EVENT_LOG, "Model loaded")
     } catch (e: Exception) {
       sendEvent(EVENT_LOG, "Downloading model...")
+      var lastPercent = -1
       RunAnywhere.downloadModel(MODEL_ID).collect { progress ->
         val percent = (progress.progress * 100).toInt()
-        sendEvent(EVENT_LOG, "Downloading model... $percent%")
+        if (percent != lastPercent && percent % 5 == 0) {
+          lastPercent = percent
+          sendEvent(EVENT_LOG, "Downloading model... $percent%")
+        }
       }
       RunAnywhere.loadLLMModel(MODEL_ID)
       sendEvent(EVENT_LOG, "Model loaded")
