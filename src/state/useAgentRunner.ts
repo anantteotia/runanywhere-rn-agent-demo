@@ -9,7 +9,7 @@ import {
   subscribe,
 } from '../native/runanywhere';
 
-const MODEL_ID = 'qwen2.5-0.5b-instruct-q6_k';
+const MODEL_ID = 'smollm2-360m-instruct-q8_0';
 const API_KEY = '';
 const ENDPOINT = '';
 

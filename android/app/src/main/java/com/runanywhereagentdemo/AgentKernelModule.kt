@@ -32,7 +32,7 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   companion object {
     const val NAME = "AgentKernel"
     private const val TAG = "AgentKernel"
-    private const val MODEL_ID = "qwen2.5-0.5b-instruct-q6_k"
+    private const val MODEL_ID = "smollm2-360m-instruct-q8_0"
 
     const val EVENT_LOG = "AGENT_LOG"
     const val EVENT_DONE = "AGENT_DONE"
@@ -155,7 +155,7 @@ If unsure, return: {"action":"wait","reason":"unsure"}
     val userPrompt = "GOAL: $goal\n\nSCREEN_CONTEXT:\n$trimmedContext"
 
     val options = LLMGenerationOptions(
-      maxTokens = 80,
+      maxTokens = 48,
       temperature = 0.1f,
       topP = 0.9f,
       streamingEnabled = false,
