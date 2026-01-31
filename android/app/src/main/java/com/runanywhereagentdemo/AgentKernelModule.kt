@@ -173,7 +173,12 @@ JSON:
     } catch (_: JSONException) {
       val matcher = Pattern.compile("\\{.*?\\}", Pattern.DOTALL).matcher(cleaned)
       if (matcher.find()) {
-        JSONObject(matcher.group())
+        try {
+          JSONObject(matcher.group())
+        } catch (_: JSONException) {
+          sendEvent(EVENT_LOG, "LLM raw (truncated): ${cleaned.take(200)}")
+          heuristicDecision(cleaned)
+        }
       } else {
         sendEvent(EVENT_LOG, "LLM raw (truncated): ${cleaned.take(200)}")
         heuristicDecision(cleaned)
