@@ -12,6 +12,7 @@ import com.runanywhere.sdk.public.extensions.cancelGeneration
 import com.runanywhere.sdk.public.extensions.downloadModel
 import com.runanywhere.sdk.public.extensions.generateStream
 import com.runanywhere.sdk.public.extensions.loadLLMModel
+import com.runanywhere.sdk.public.extensions.LLM.LLMGenerationOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -102,7 +103,7 @@ class RunAnywhereModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun runAgent(task: String, context: String?, promise: Promise) {
-        Log.d(TAG, "runAgent(task=$task)")
+        Log.i(TAG, "runAgent(task=$task)")
         runJob?.cancel()
 
         val prompt = if (context.isNullOrBlank()) {
@@ -111,9 +112,18 @@ class RunAnywhereModule(private val reactContext: ReactApplicationContext) :
             "$task\n\nContext: $context"
         }
 
+        val options = LLMGenerationOptions(
+            maxTokens = 128,
+            temperature = 0.2f,
+            topP = 0.9f,
+            stopSequences = listOf("\n\n", "\nUser:", "\nTask:", "###"),
+            streamingEnabled = true,
+            systemPrompt = "You are a concise assistant. Answer the user's question in one sentence.",
+        )
+
         runJob = scope.launch {
             try {
-                RunAnywhere.generateStream(prompt).collect { token ->
+                RunAnywhere.generateStream(prompt, options).collect { token ->
                     val params = Arguments.createMap().apply {
                         putString("token", token)
                     }

@@ -70,12 +70,12 @@ class MainApplication : Application(), ReactApplication {
     Log.i(TAG, "LlamaCPP backend registered")
 
     RunAnywhere.registerModel(
-      id = "smollm2-360m-q8_0",
-      name = "SmolLM2 360M Q8_0",
-      url = "https://huggingface.co/prithivMLmods/SmolLM2-360M-GGUF/resolve/main/SmolLM2-360M.Q8_0.gguf",
+      id = "qwen2.5-0.5b-instruct-q6_k",
+      name = "Qwen 2.5 0.5B Instruct Q6_K",
+      url = "https://huggingface.co/Triangle104/Qwen2.5-0.5B-Instruct-Q6_K-GGUF/resolve/main/qwen2.5-0.5b-instruct-q6_k.gguf",
       framework = InferenceFramework.LLAMA_CPP,
-      memoryRequirement = 500_000_000,
+      memoryRequirement = 600_000_000,
     )
-    Log.i(TAG, "Default model registered: smollm2-360m-q8_0")
+    Log.i(TAG, "Default model registered: qwen2.5-0.5b-instruct-q6_k")
   }
 }

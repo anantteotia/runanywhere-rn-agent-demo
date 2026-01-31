@@ -1,97 +1,74 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# RunAnywhere Agent Demo (React Native + Kotlin)
 
-# Getting Started
+This is a React Native demo app that uses the **RunAnywhere Kotlin SDK** on Android via a native Kotlin bridge. It demonstrates on-device LLM generation with streaming tokens.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## Stack
 
-## Step 1: Start Metro
+- **UI:** React Native (TypeScript)
+- **Native:** Kotlin (React Native Module)
+- **SDK:** RunAnywhere Kotlin SDK (LlamaCPP backend)
+- **Device:** ARM64 Android device (AYN Thor recommended)
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## Model (default)
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+```
+qwen2.5-0.5b-instruct-q6_k
+```
+
+Model is registered in `android/app/src/main/java/com/runanywhereagentdemo/MainApplication.kt` and used in `src/state/useAgentRunner.ts`.
+
+## Prerequisites
+
+- Node.js + npm
+- Android Studio + SDK + platform-tools
+- Java 17+ (Android Studio bundled JBR is fine)
+- A physical ARM64 Android device (x86 emulators are not supported for native libs)
+
+## Setup
+
+1. Start Metro
 
 ```sh
-# Using npm
 npm start
-
-# OR using Yarn
-yarn start
 ```
 
-## Step 2: Build and run your app
-
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
-
-### Android
+2. Build & install on device
 
 ```sh
-# Using npm
-npm run android
-
-# OR using Yarn
-yarn android
+npx react-native run-android --device <your-device-id>
 ```
 
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
+Example device id:
 
 ```sh
-bundle install
+adb devices
 ```
 
-Then, and every time you update your native dependencies, run:
+## RunAnywhere SDK Notes
+
+The SDK is built locally and published to Maven Local.
+
+If you change SDK code or clean caches, republish:
 
 ```sh
-bundle exec pod install
+cd G:\Code\runanywhere-sdks\sdk\runanywhere-kotlin
+.\gradlew --% -Prunanywhere.testLocal=false -Prunanywhere.nativeLibVersion=0.17.4 publishToMavenLocal
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
+## Troubleshooting
 
-```sh
-# Using npm
-npm run ios
+- **App crashes on emulator**: RunAnywhere JNI libs are ARM64. Use a real device.
+- **Gradle plugin error with Java 25**: Use Android Studio JBR (Java 17/21).
+- **Model download is slow**: First run downloads ~500MB+ model.
+- **Poor answers**: Switch to larger model in `MainApplication.kt` and `useAgentRunner.ts`.
 
-# OR using Yarn
-yarn ios
-```
+## Demo Checklist
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+- Open app on device
+- Enter a task (e.g., "How do I cook pasta?")
+- Observe streaming output
+- Tap Stop to cancel generation
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+---
 
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations!
-
-You've successfully run and modified your React Native App.
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+Built for the RunAnywhere Agent demo.

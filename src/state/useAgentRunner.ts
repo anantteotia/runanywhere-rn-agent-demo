@@ -1,37 +1,38 @@
 import {useState, useCallback, useRef, useEffect} from 'react';
-import type {AgentState} from './types';
+import type {AgentEvent, AgentState} from './types';
+import {
+  cancelRun,
+  downloadModel,
+  initialize,
+  loadModel,
+  runAgent,
+  subscribe,
+} from '../native/runanywhere';
 
-const MOCK_RESPONSE = [
-  'Analyzing the request...\n',
-  'Setting up execution environment.\n\n',
-  '> Step 1: Parsing input parameters\n',
-  '  - Task received successfully\n',
-  '  - Validating configuration\n\n',
-  '> Step 2: Running agent logic\n',
-  '  - Connecting to model backend\n',
-  '  - Generating response tokens\n',
-  '  - Processing tool calls\n\n',
-  '> Step 3: Finalizing output\n',
-  '  - Aggregating results\n',
-  '  - Formatting response\n\n',
-  'Done. Agent completed successfully.',
-];
+const MODEL_ID = 'qwen2.5-0.5b-instruct-q6_k';
+const API_KEY = '';
+const ENDPOINT = '';
 
-function buildTokens(task: string, context?: string): string[] {
-  const header = `Task: "${task}"\n` +
-    (context ? `Context: "${context}"\n\n` : '\n');
-  return [header, ...MOCK_RESPONSE];
+function getTodayString() {
+  return new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
 }
 
 export function useAgentRunner() {
   const [state, setState] = useState<AgentState>({phase: 'idle'});
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const outputRef = useRef('');
+  const unsubscribeRef = useRef<(() => void) | null>(null);
+  const modelReadyRef = useRef(false);
 
   const cleanup = useCallback(() => {
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
     }
   }, []);
 
@@ -45,56 +46,71 @@ export function useAgentRunner() {
 
   const stop = useCallback(() => {
     cleanup();
+    cancelRun().catch(() => null);
     setState({phase: 'idle'});
   }, [cleanup]);
 
-  const start = useCallback(
-    (task: string, context?: string) => {
-      cleanup();
-      const tokens = buildTokens(task, context);
+  const handleEvent = useCallback((event: AgentEvent) => {
+    if (!mountedRef.current) {
+      return;
+    }
 
-      // Phase 1: downloading (progress 0→100 over ~1s)
-      let progress = 0;
-      setState({phase: 'downloading', progress: 0});
+    switch (event.type) {
+      case 'download_progress':
+        setState({phase: 'downloading', progress: event.progress});
+        break;
+      case 'token':
+        outputRef.current += event.text;
+        setState({phase: 'running', partialOutput: outputRef.current});
+        break;
+      case 'done':
+        setState({phase: 'done', finalOutput: outputRef.current});
+        cleanup();
+        break;
+      case 'error':
+        setState({phase: 'error', message: event.message});
+        cleanup();
+        break;
+      default:
+        break;
+    }
+  }, [cleanup]);
 
-      timerRef.current = setInterval(() => {
-        if (!mountedRef.current) { return; }
-        progress += 10;
-        if (progress >= 100) {
-          clearInterval(timerRef.current!);
-          timerRef.current = null;
+  const start = useCallback(async (task: string, context?: string) => {
+    cleanup();
+    outputRef.current = '';
+    setState({phase: 'downloading', progress: 0});
+    unsubscribeRef.current = subscribe(handleEvent);
 
-          // Phase 2: loading for 500ms
-          setState({phase: 'loading'});
-          timerRef.current = setTimeout(() => {
-            if (!mountedRef.current) { return; }
-            timerRef.current = null;
+    try {
+      await initialize(API_KEY, ENDPOINT);
 
-            // Phase 3: running — emit tokens every 100ms
-            let tokenIndex = 0;
-            let accumulated = '';
-            setState({phase: 'running', partialOutput: ''});
-
-            timerRef.current = setInterval(() => {
-              if (!mountedRef.current) { return; }
-              if (tokenIndex < tokens.length) {
-                accumulated += tokens[tokenIndex];
-                tokenIndex++;
-                setState({phase: 'running', partialOutput: accumulated});
-              } else {
-                clearInterval(timerRef.current!);
-                timerRef.current = null;
-                setState({phase: 'done', finalOutput: accumulated});
-              }
-            }, 100) as unknown as ReturnType<typeof setInterval>;
-          }, 500) as unknown as ReturnType<typeof setInterval>;
-        } else {
-          setState({phase: 'downloading', progress});
+      if (!modelReadyRef.current) {
+        await downloadModel(MODEL_ID);
+        if (!mountedRef.current) {
+          return;
         }
-      }, 100);
-    },
-    [cleanup],
-  );
+        setState({phase: 'loading'});
+        await loadModel(MODEL_ID);
+        modelReadyRef.current = true;
+      } else {
+        setState({phase: 'loading'});
+      }
+
+      const today = getTodayString();
+      const dateContext = `Today's date is ${today}.`;
+      const finalContext = context
+        ? `${context}\n\n${dateContext}`
+        : dateContext;
+
+      await runAgent(task, finalContext);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown error';
+      setState({phase: 'error', message});
+      cleanup();
+    }
+  }, [cleanup, handleEvent]);
 
   return {state, start, stop};
 }
