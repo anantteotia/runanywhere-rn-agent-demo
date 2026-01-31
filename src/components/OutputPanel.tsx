@@ -146,8 +146,10 @@ export function OutputPanel({output}: Props): React.JSX.Element {
       ref={scrollRef}
       style={styles.container}
       contentContainerStyle={styles.content}
+      scrollEnabled
       nestedScrollEnabled
-      showsVerticalScrollIndicator>
+      showsVerticalScrollIndicator
+      persistentScrollbar>
       {lines.length > 0 ? (
         lines.map((line, idx) => (
           <Text key={idx} style={styles.text}>
