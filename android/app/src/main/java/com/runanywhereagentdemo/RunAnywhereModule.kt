@@ -7,6 +7,17 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.runanywhere.sdk.public.RunAnywhere
+import com.runanywhere.sdk.public.extensions.cancelGeneration
+import com.runanywhere.sdk.public.extensions.downloadModel
+import com.runanywhere.sdk.public.extensions.generateStream
+import com.runanywhere.sdk.public.extensions.loadLLMModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class RunAnywhereModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -21,9 +32,16 @@ class RunAnywhereModule(private val reactContext: ReactApplicationContext) :
         const val EVENT_ERROR = "RUNANYWHERE_ERROR"
     }
 
-    private var isRunning = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var runJob: Job? = null
 
     override fun getName(): String = NAME
+
+    @Deprecated("Deprecated in ReactContextBaseJavaModule")
+    override fun onCatalystInstanceDestroy() {
+        super.onCatalystInstanceDestroy()
+        scope.cancel()
+    }
 
     private fun sendEvent(eventName: String, params: com.facebook.react.bridge.WritableMap?) {
         reactContext
@@ -33,105 +51,96 @@ class RunAnywhereModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun initialize(apiKey: String, endpoint: String, promise: Promise) {
-        Log.d(TAG, "initialize(apiKey=*****, endpoint=$endpoint)")
-        // TODO: Replace with actual RunAnywhere SDK initialization
+        // SDK is initialized in MainApplication.onCreate().
+        // This method is kept for JS-side API compatibility.
+        Log.d(TAG, "initialize() — SDK already initialized via MainApplication")
         promise.resolve(null)
     }
 
     @ReactMethod
-    fun downloadModel(modelName: String, promise: Promise) {
-        Log.d(TAG, "downloadModel(modelName=$modelName)")
-        // TODO: Replace with actual SDK download call.
-        // For now, simulate progress events from a background thread.
-        isRunning = true
-        Thread {
+    fun downloadModel(modelId: String, promise: Promise) {
+        Log.d(TAG, "downloadModel(modelId=$modelId)")
+        scope.launch {
             try {
-                for (progress in 0..100 step 10) {
-                    if (!isRunning) {
-                        return@Thread
-                    }
+                RunAnywhere.downloadModel(modelId).collect { progress ->
+                    val progressPercent = (progress.progress * 100).toInt()
                     val params = Arguments.createMap().apply {
-                        putInt("progress", progress)
+                        putInt("progress", progressPercent)
                     }
                     sendEvent(EVENT_DOWNLOAD_PROGRESS, params)
-                    Thread.sleep(100)
                 }
                 promise.resolve(null)
             } catch (e: Exception) {
+                Log.e(TAG, "Download failed: ${e.message}", e)
+                val params = Arguments.createMap().apply {
+                    putString("message", e.message ?: "Download failed")
+                }
+                sendEvent(EVENT_ERROR, params)
                 promise.reject("DOWNLOAD_ERROR", e.message, e)
             }
-        }.start()
+        }
     }
 
     @ReactMethod
-    fun loadModel(modelName: String, promise: Promise) {
-        Log.d(TAG, "loadModel(modelName=$modelName)")
-        // TODO: Replace with actual SDK model loading
-        Thread {
+    fun loadModel(modelId: String, promise: Promise) {
+        Log.d(TAG, "loadModel(modelId=$modelId)")
+        scope.launch {
             try {
-                Thread.sleep(500)
+                RunAnywhere.loadLLMModel(modelId)
+                Log.i(TAG, "Model loaded: $modelId")
                 promise.resolve(null)
             } catch (e: Exception) {
+                Log.e(TAG, "Load failed: ${e.message}", e)
+                val params = Arguments.createMap().apply {
+                    putString("message", e.message ?: "Model load failed")
+                }
+                sendEvent(EVENT_ERROR, params)
                 promise.reject("LOAD_ERROR", e.message, e)
             }
-        }.start()
+        }
     }
 
     @ReactMethod
     fun runAgent(task: String, context: String?, promise: Promise) {
-        Log.d(TAG, "runAgent(task=$task, context=$context)")
-        // TODO: Replace with actual SDK agent run.
-        // For now, simulate token streaming from a background thread.
-        isRunning = true
-        Thread {
-            try {
-                val tokens = listOf(
-                    "Analyzing the request...\n",
-                    "Setting up execution environment.\n\n",
-                    "> Step 1: Parsing input parameters\n",
-                    "  - Task received successfully\n",
-                    "  - Validating configuration\n\n",
-                    "> Step 2: Running agent logic\n",
-                    "  - Connecting to model backend\n",
-                    "  - Generating response tokens\n",
-                    "  - Processing tool calls\n\n",
-                    "> Step 3: Finalizing output\n",
-                    "  - Aggregating results\n",
-                    "  - Formatting response\n\n",
-                    "Done. Agent completed successfully.",
-                )
+        Log.d(TAG, "runAgent(task=$task)")
+        runJob?.cancel()
 
-                for (token in tokens) {
-                    if (!isRunning) {
-                        return@Thread
-                    }
+        val prompt = if (context.isNullOrBlank()) {
+            task
+        } else {
+            "$task\n\nContext: $context"
+        }
+
+        runJob = scope.launch {
+            try {
+                RunAnywhere.generateStream(prompt).collect { token ->
                     val params = Arguments.createMap().apply {
                         putString("token", token)
                     }
                     sendEvent(EVENT_TOKEN, params)
-                    Thread.sleep(100)
                 }
-
-                if (isRunning) {
-                    sendEvent(EVENT_DONE, null)
-                    isRunning = false
-                }
+                sendEvent(EVENT_DONE, null)
                 promise.resolve(null)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.d(TAG, "Generation cancelled")
+                // Don't reject — cancellation is expected via cancelRun
             } catch (e: Exception) {
+                Log.e(TAG, "Generation failed: ${e.message}", e)
                 val params = Arguments.createMap().apply {
-                    putString("message", e.message ?: "Unknown error")
+                    putString("message", e.message ?: "Generation failed")
                 }
                 sendEvent(EVENT_ERROR, params)
-                isRunning = false
                 promise.reject("RUN_ERROR", e.message, e)
             }
-        }.start()
+        }
     }
 
     @ReactMethod
     fun cancelRun(promise: Promise) {
         Log.d(TAG, "cancelRun()")
-        isRunning = false
+        runJob?.cancel()
+        runJob = null
+        RunAnywhere.cancelGeneration()
         promise.resolve(null)
     }
 

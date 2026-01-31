@@ -84,6 +84,18 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            pickFirsts += [
+                "lib/arm64-v8a/libc++_shared.so",
+                "lib/arm64-v8a/librac_commons.so",
+            ]
+        }
     }
     signingConfigs {
         debug {
@@ -107,6 +119,11 @@ android {
     }
 }
 
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
@@ -116,4 +133,12 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // RunAnywhere SDK (published to Maven Local from runanywhere-sdks repo)
+    implementation("io.github.sanchitmonga22:runanywhere-sdk-android:0.1.5-SNAPSHOT")
+    implementation("io.github.sanchitmonga22:runanywhere-llamacpp-android:0.1.5-SNAPSHOT")
+
+    // Coroutines (required by RunAnywhere SDK)
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 }
