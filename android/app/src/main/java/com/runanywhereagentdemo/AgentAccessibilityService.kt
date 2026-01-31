@@ -6,7 +6,6 @@ import android.content.Context
 import android.graphics.Rect
 import android.provider.Settings
 import android.util.Log
-import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
@@ -47,16 +46,22 @@ class AgentAccessibilityService : AccessibilityService() {
     // No-op
   }
 
-  fun getInteractiveElementsJson(): String {
+  fun getInteractiveElementsJson(maxElements: Int = 80, maxTextLength: Int = 60): String {
     val root = rootInActiveWindow ?: return "[]"
     val results = JSONArray()
-    traverseNode(root, results)
+    traverseNode(root, results, maxElements, maxTextLength)
     return results.toString()
   }
 
-  private fun traverseNode(node: AccessibilityNodeInfo, results: JSONArray) {
-    val text = node.text?.toString()?.trim().orEmpty()
-    val desc = node.contentDescription?.toString()?.trim().orEmpty()
+  private fun traverseNode(
+    node: AccessibilityNodeInfo,
+    results: JSONArray,
+    maxElements: Int,
+    maxTextLength: Int
+  ) {
+    if (results.length() >= maxElements) return
+    val text = node.text?.toString()?.trim().orEmpty().take(maxTextLength)
+    val desc = node.contentDescription?.toString()?.trim().orEmpty().take(maxTextLength)
     val clickable = node.isClickable
     val editable = node.isEditable
     val focusable = node.isFocusable
@@ -86,12 +91,14 @@ class AgentAccessibilityService : AccessibilityService() {
         put("bottom", bounds.bottom)
       })
       obj.put("center", JSONArray().put(centerX).put(centerY))
-      results.put(obj)
+      if (results.length() < maxElements) {
+        results.put(obj)
+      }
     }
 
     for (i in 0 until node.childCount) {
       node.getChild(i)?.let { child ->
-        traverseNode(child, results)
+        traverseNode(child, results, maxElements, maxTextLength)
       }
     }
   }
@@ -115,7 +122,11 @@ class AgentAccessibilityService : AccessibilityService() {
   }
 
   fun pressEnter() {
-    dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
-    dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
+    val root = rootInActiveWindow ?: return
+    val focused = findNode(root) { it.isFocused } ?: return
+    val handled = focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    if (!handled) {
+      focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+    }
   }
 }

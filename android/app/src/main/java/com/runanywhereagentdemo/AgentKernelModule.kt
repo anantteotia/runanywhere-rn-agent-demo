@@ -1,4 +1,4 @@
-package com.runanywhereagentdemo
+﻿package com.runanywhereagentdemo
 
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
@@ -12,7 +12,9 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.extensions.LLM.LLMGenerationOptions
+import com.runanywhere.sdk.public.extensions.downloadModel
 import com.runanywhere.sdk.public.extensions.generateStream
+import com.runanywhere.sdk.public.extensions.loadLLMModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,7 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   companion object {
     const val NAME = "AgentKernel"
     private const val TAG = "AgentKernel"
+    private const val MODEL_ID = "qwen2.5-0.5b-instruct-q6_k"
 
     const val EVENT_LOG = "AGENT_LOG"
     const val EVENT_DONE = "AGENT_DONE"
@@ -67,13 +70,18 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
     runJob = scope.launch {
       try {
         sendEvent(EVENT_LOG, "Agent started")
+        ensureModelReady()
+
         val maxSteps = 8
         for (step in 1..maxSteps) {
           sendEvent(EVENT_LOG, "Step $step/$maxSteps: scanning screen")
           val service = AgentAccessibilityService.instance
             ?: throw IllegalStateException("Accessibility service not connected")
 
-          val screenContext = service.getInteractiveElementsJson()
+          val screenContext = service.getInteractiveElementsJson(
+            maxElements = 80,
+            maxTextLength = 60
+          )
           val decisionJson = decideNextAction(goal, screenContext)
           val decision = parseDecision(decisionJson)
 
@@ -105,11 +113,23 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
     promise.resolve(null)
   }
 
+  private suspend fun ensureModelReady() {
+    try {
+      RunAnywhere.loadLLMModel(MODEL_ID)
+      sendEvent(EVENT_LOG, "Model loaded")
+    } catch (e: Exception) {
+      sendEvent(EVENT_LOG, "Downloading model...")
+      RunAnywhere.downloadModel(MODEL_ID).collect { /* ignore progress */ }
+      RunAnywhere.loadLLMModel(MODEL_ID)
+      sendEvent(EVENT_LOG, "Model loaded")
+    }
+  }
+
   private suspend fun decideNextAction(goal: String, screenContext: String): String {
     val systemPrompt = """
-You are an Android device agent. You must decide the next single action to achieve the goal.
-You will receive the GOAL and a JSON list of interactive UI elements with coordinates.
-Return ONLY a JSON object.
+You are an Android device agent. Decide the NEXT single action to reach the goal.
+You will receive: GOAL and SCREEN_CONTEXT (JSON list of interactive UI elements with coordinates).
+Return ONLY a compact JSON object with one action.
 
 Actions:
 {"action":"tap","coordinates":[x,y],"reason":"..."}
@@ -122,21 +142,27 @@ Actions:
 {"action":"done","reason":"..."}
     """.trimIndent()
 
-    val userPrompt = "GOAL: $goal\n\nSCREEN_CONTEXT:\n$screenContext"
+    val trimmedContext = shrinkContext(screenContext)
+    val userPrompt = "GOAL: $goal\n\nSCREEN_CONTEXT:\n$trimmedContext"
 
     val options = LLMGenerationOptions(
-      maxTokens = 256,
+      maxTokens = 128,
       temperature = 0.1f,
       topP = 0.9f,
       streamingEnabled = true,
       systemPrompt = systemPrompt
     )
 
-    val buffer = StringBuilder()
-    RunAnywhere.generateStream(userPrompt, options).collect { token ->
-      buffer.append(token)
+    return try {
+      val buffer = StringBuilder()
+      RunAnywhere.generateStream(userPrompt, options).collect { token ->
+        buffer.append(token)
+      }
+      buffer.toString()
+    } catch (e: Exception) {
+      Log.e(TAG, "Decision generation failed: ${e.message}", e)
+      "{\"action\":\"wait\",\"reason\":\"LLM not ready\"}"
     }
-    return buffer.toString()
   }
 
   private fun parseDecision(text: String): JSONObject {
@@ -149,6 +175,15 @@ Actions:
       } else {
         JSONObject("""{"action":"wait","reason":"Could not parse response"}""")
       }
+    }
+  }
+
+  private fun shrinkContext(screenContext: String): String {
+    val maxChars = 5000
+    return if (screenContext.length <= maxChars) {
+      screenContext
+    } else {
+      screenContext.substring(0, maxChars) + "\n...truncated..."
     }
   }
 
