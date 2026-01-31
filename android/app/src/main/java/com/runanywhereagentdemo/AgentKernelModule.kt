@@ -22,6 +22,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONException
 import org.json.JSONObject
 import java.util.regex.Pattern
@@ -79,8 +80,8 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
             ?: throw IllegalStateException("Accessibility service not connected")
 
           val screenContext = service.getInteractiveElementsJson(
-            maxElements = 40,
-            maxTextLength = 40
+            maxElements = 12,
+            maxTextLength = 24
           )
           val decisionJson = decideNextAction(goal, screenContext)
           val decision = parseDecision(decisionJson)
@@ -133,29 +134,18 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   }
 
   private suspend fun decideNextAction(goal: String, screenContext: String): String {
-    val systemPrompt = """
-You are an Android device agent. Decide the NEXT single action to reach the goal.
-You will receive: GOAL and SCREEN_CONTEXT (JSON list of interactive UI elements with coordinates).
-Return ONLY a compact JSON object with one action, on a single line.
-Do not use markdown or code fences.
-
-Actions:
-{"action":"tap","coordinates":[x,y],"reason":"..."}
-{"action":"type","text":"...","reason":"..."}
-{"action":"enter","reason":"..."}
-{"action":"swipe","direction":"up|down|left|right","reason":"..."}
-{"action":"home","reason":"..."}
-{"action":"back","reason":"..."}
-{"action":"wait","reason":"..."}
-{"action":"done","reason":"..."}
-If unsure, return: {"action":"wait","reason":"unsure"}
+    val systemPrompt = null
+    val trimmedContext = shrinkContext(screenContext)
+    val userPrompt = """
+Return ONLY one JSON line with the next action.
+Actions: tap(with coordinates), type(text), enter, swipe(direction), home, back, wait, done.
+GOAL: $goal
+SCREEN_CONTEXT: $trimmedContext
+JSON:
     """.trimIndent()
 
-    val trimmedContext = shrinkContext(screenContext)
-    val userPrompt = "GOAL: $goal\n\nSCREEN_CONTEXT:\n$trimmedContext"
-
     val options = LLMGenerationOptions(
-      maxTokens = 48,
+      maxTokens = 32,
       temperature = 0.1f,
       topP = 0.9f,
       streamingEnabled = false,
@@ -163,7 +153,9 @@ If unsure, return: {"action":"wait","reason":"unsure"}
     )
 
     return try {
-      val result = RunAnywhere.generate(userPrompt, options)
+      val result = withContext(Dispatchers.Default) {
+        RunAnywhere.generate(userPrompt, options)
+      }
       result.text
     } catch (e: Exception) {
       Log.e(TAG, "Decision generation failed: ${e.message}", e)
@@ -224,7 +216,7 @@ If unsure, return: {"action":"wait","reason":"unsure"}
   }
 
   private fun shrinkContext(screenContext: String): String {
-    val maxChars = 2500
+    val maxChars = 800
     return if (screenContext.length <= maxChars) {
       screenContext
     } else {

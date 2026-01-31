@@ -46,7 +46,7 @@ class AgentAccessibilityService : AccessibilityService() {
     // No-op
   }
 
-  fun getInteractiveElementsJson(maxElements: Int = 40, maxTextLength: Int = 40): String {
+  fun getInteractiveElementsJson(maxElements: Int = 12, maxTextLength: Int = 24): String {
     val root = rootInActiveWindow ?: return "[]"
     val results = JSONArray()
     traverseNode(root, results, maxElements, maxTextLength)
