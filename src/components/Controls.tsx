@@ -11,13 +11,20 @@ interface Props {
   onRun: (task: string, context?: string) => void;
   onStop: () => void;
   isRunning: boolean;
+  modeLabel?: string;
 }
 
-export function Controls({onRun, onStop, isRunning}: Props): React.JSX.Element {
+export function Controls({
+  onRun,
+  onStop,
+  isRunning,
+  modeLabel,
+}: Props): React.JSX.Element {
   const [task, setTask] = useState('');
   const [context, setContext] = useState('');
 
   const canRun = !isRunning && task.trim().length > 0;
+  const buttonLabel = modeLabel ? `Run ${modeLabel}` : 'Run Agent';
 
   return (
     <View style={styles.container}>
@@ -45,7 +52,7 @@ export function Controls({onRun, onStop, isRunning}: Props): React.JSX.Element {
           style={[styles.button, styles.primary, !canRun && styles.buttonDisabled]}
           onPress={() => onRun(task.trim(), context.trim() || undefined)}
           disabled={!canRun}>
-          <Text style={styles.buttonText}>Run Agent</Text>
+          <Text style={styles.buttonText}>{buttonLabel}</Text>
         </TouchableOpacity>
         {isRunning && (
           <TouchableOpacity

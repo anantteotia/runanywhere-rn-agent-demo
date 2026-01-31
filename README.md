@@ -69,40 +69,21 @@ cd G:\Code\runanywhere-sdks\sdk\runanywhere-kotlin
 - Observe streaming output
 - Tap Stop to cancel generation
 
-## Agent Demo (Android Action Kernel style)
+## On-device Agent Mode (Accessibility + RunAnywhere SDK)
 
-This repo includes a **Python-based Android agent** (ADB + accessibility tree) in `agent/`.  
-It can control native apps on a connected Android device.
+This app includes an **on-device agent loop** that reads the Android accessibility tree,
+decides the next action with the RunAnywhere LLM, and executes it on the device.
 
-### Prerequisites
-- Python 3.10+
-- ADB installed
-- Android device with USB debugging enabled
+### Enable Accessibility Service
+1. Open **Settings** on the device.
+2. Go to **Accessibility**.
+3. Enable **RunAnywhere Agent Demo**.
 
 ### Run the agent
-
-```sh
-cd agent
-python -m venv .venv
-.\.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-```
-
-Edit `.env` and set:
-- `OPENAI_API_KEY` (or switch `LLM_PROVIDER` + keys)
-- `DEVICE_ID` (from `adb devices`)
-
-Then run:
-
-```sh
-python kernel.py
-```
-
-Example goal:
-```
-Open the Settings app and turn on Wi‑Fi
-```
+1. Open the app.
+2. Switch to **Device Agent** mode.
+3. Enter a goal (e.g., `Open Settings and turn on Wi‑Fi`).
+4. Tap **Run Device Agent**.
 
 ## Demo Screenshots
 

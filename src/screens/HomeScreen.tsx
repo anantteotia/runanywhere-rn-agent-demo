@@ -1,8 +1,16 @@
-import React from 'react';
-import {SafeAreaView, ScrollView, StyleSheet, Text, View} from 'react-native';
+﻿import React, {useMemo, useState} from 'react';
+import {
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import {OutputPanel} from '../components/OutputPanel';
 import {Controls} from '../components/Controls';
 import {useAgentRunner} from '../state/useAgentRunner';
+import {useDeviceAgent} from '../state/useDeviceAgent';
 
 function getOutput(state: ReturnType<typeof useAgentRunner>['state']): string {
   switch (state.phase) {
@@ -40,12 +48,47 @@ function phaseLabel(phase: string): {text: string; color: string} {
 
 export function HomeScreen(): React.JSX.Element {
   const {state, start, stop} = useAgentRunner();
-  const output = getOutput(state);
-  const label = phaseLabel(state.phase);
+  const deviceAgent = useDeviceAgent();
+  const [mode, setMode] = useState<'llm' | 'device'>('llm');
+
+  const output = useMemo(() => {
+    if (mode === 'device') {
+      switch (deviceAgent.state.phase) {
+        case 'running':
+          return deviceAgent.state.output;
+        case 'done':
+          return deviceAgent.state.output;
+        case 'error':
+          return `Error: ${deviceAgent.state.message}`;
+        default:
+          return '';
+      }
+    }
+    return getOutput(state);
+  }, [mode, deviceAgent.state, state]);
+
+  const label = useMemo(() => {
+    if (mode === 'device') {
+      switch (deviceAgent.state.phase) {
+        case 'running':
+          return {text: 'AGENT', color: '#2ecc71'};
+        case 'done':
+          return {text: 'DONE', color: '#3498db'};
+        case 'error':
+          return {text: 'ERROR', color: '#e74c3c'};
+        default:
+          return {text: 'READY', color: '#888'};
+      }
+    }
+    return phaseLabel(state.phase);
+  }, [mode, deviceAgent.state, state.phase]);
+
   const isRunning =
-    state.phase === 'downloading' ||
-    state.phase === 'loading' ||
-    state.phase === 'running';
+    mode === 'device'
+      ? deviceAgent.state.phase === 'running'
+      : state.phase === 'downloading' ||
+        state.phase === 'loading' ||
+        state.phase === 'running';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -58,8 +101,21 @@ export function HomeScreen(): React.JSX.Element {
           <View>
             <Text style={styles.title}>RunAnywhere Agent</Text>
             <Text style={styles.subtitle}>On-device AI • Streaming responses</Text>
+            <View style={styles.modeRow}>
+              <TouchableOpacity
+                style={[styles.modeButton, mode === 'llm' && styles.modeButtonActive]}
+                onPress={() => setMode('llm')}>
+                <Text style={styles.modeButtonText}>LLM Chat</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modeButton, mode === 'device' && styles.modeButtonActive]}
+                onPress={() => setMode('device')}>
+                <Text style={styles.modeButtonText}>Device Agent</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-          <View style={[styles.badge, {backgroundColor: label.color}]}>
+          <View style={[styles.badge, {backgroundColor: label.color}]}
+          >
             <Text style={styles.badgeText}>{label.text}</Text>
           </View>
         </View>
@@ -67,7 +123,16 @@ export function HomeScreen(): React.JSX.Element {
           <OutputPanel output={output} />
         </View>
         <View style={styles.card}>
-          <Controls onRun={start} onStop={stop} isRunning={isRunning} />
+          {mode === 'device' ? (
+            <Controls
+              onRun={(task) => deviceAgent.start(task)}
+              onStop={deviceAgent.stop}
+              isRunning={isRunning}
+              modeLabel="Device Agent"
+            />
+          ) : (
+            <Controls onRun={start} onStop={stop} isRunning={isRunning} />
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -122,6 +187,28 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontSize: 12,
     color: '#9fb0d6',
+  },
+  modeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  modeButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: 'rgba(18, 24, 50, 0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(120, 145, 200, 0.25)',
+  },
+  modeButtonActive: {
+    backgroundColor: '#1f6feb',
+    borderColor: '#1f6feb',
+  },
+  modeButtonText: {
+    color: '#e0e0e0',
+    fontSize: 11,
+    fontWeight: '600',
   },
   badge: {
     paddingHorizontal: 8,

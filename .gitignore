@@ -66,10 +66,9 @@ yarn-error.log
 # testing
 /coverage
 
-# Agent demo (python)
-agent/.env
-agent/.venv/
-agent/__pycache__/
+# Local agent artifacts (removed from repo)
+agent/
+
 
 # Yarn
 .yarn/*

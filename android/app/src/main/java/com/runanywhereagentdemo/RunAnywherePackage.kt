@@ -8,7 +8,10 @@ import com.facebook.react.uimanager.ViewManager
 @Suppress("DEPRECATION")
 class RunAnywherePackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-        return listOf(RunAnywhereModule(reactContext))
+        return listOf(
+            RunAnywhereModule(reactContext),
+            AgentKernelModule(reactContext)
+        )
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {

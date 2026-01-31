@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">RunAnywhereAgentDemo</string>
+    <string name="agent_accessibility_description">Enable to let the RunAnywhere agent read the screen and perform actions.</string>
 </resources>
