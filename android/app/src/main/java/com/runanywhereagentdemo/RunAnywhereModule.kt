@@ -113,7 +113,7 @@ class RunAnywhereModule(private val reactContext: ReactApplicationContext) :
         }
 
         val options = LLMGenerationOptions(
-            maxTokens = 128,
+            maxTokens = 512,
             temperature = 0.2f,
             topP = 0.9f,
             stopSequences = listOf("\n\n", "\nUser:", "\nTask:", "###"),
