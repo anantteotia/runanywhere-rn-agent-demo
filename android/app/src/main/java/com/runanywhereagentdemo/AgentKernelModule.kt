@@ -132,7 +132,8 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
     val systemPrompt = """
 You are an Android device agent. Decide the NEXT single action to reach the goal.
 You will receive: GOAL and SCREEN_CONTEXT (JSON list of interactive UI elements with coordinates).
-Return ONLY a compact JSON object with one action.
+Return ONLY a compact JSON object with one action, on a single line.
+Do not use markdown or code fences.
 
 Actions:
 {"action":"tap","coordinates":[x,y],"reason":"..."}
@@ -143,6 +144,7 @@ Actions:
 {"action":"back","reason":"..."}
 {"action":"wait","reason":"..."}
 {"action":"done","reason":"..."}
+If unsure, return: {"action":"wait","reason":"unsure"}
     """.trimIndent()
 
     val trimmedContext = shrinkContext(screenContext)
@@ -166,14 +168,53 @@ Actions:
   }
 
   private fun parseDecision(text: String): JSONObject {
+    val cleaned = text
+      .replace("```json", "")
+      .replace("```", "")
+      .trim()
     return try {
-      JSONObject(text)
+      JSONObject(cleaned)
     } catch (_: JSONException) {
-      val matcher = Pattern.compile("\\{.*?\\}", Pattern.DOTALL).matcher(text)
+      val matcher = Pattern.compile("\\{.*?\\}", Pattern.DOTALL).matcher(cleaned)
       if (matcher.find()) {
         JSONObject(matcher.group())
       } else {
-        JSONObject("""{"action":"wait","reason":"Could not parse response"}""")
+        sendEvent(EVENT_LOG, "LLM raw (truncated): ${cleaned.take(200)}")
+        heuristicDecision(cleaned)
+      }
+    }
+  }
+
+  private fun heuristicDecision(text: String): JSONObject {
+    val lower = text.lowercase()
+    return when {
+      lower.contains("home") -> JSONObject("""{"action":"home","reason":"Heuristic home"}""")
+      lower.contains("back") -> JSONObject("""{"action":"back","reason":"Heuristic back"}""")
+      lower.contains("done") -> JSONObject("""{"action":"done","reason":"Heuristic done"}""")
+      lower.contains("wait") -> JSONObject("""{"action":"wait","reason":"Heuristic wait"}""")
+      lower.contains("swipe") -> {
+        val dir = when {
+          lower.contains("left") -> "left"
+          lower.contains("right") -> "right"
+          lower.contains("down") -> "down"
+          else -> "up"
+        }
+        JSONObject("""{"action":"swipe","direction":"$dir","reason":"Heuristic swipe"}""")
+      }
+      lower.contains("type") -> {
+        val matcher = Pattern.compile("\"([^\"]{1,80})\"").matcher(text)
+        val value = if (matcher.find()) matcher.group(1) else ""
+        JSONObject("""{"action":"type","text":"$value","reason":"Heuristic type"}""")
+      }
+      else -> {
+        val coordMatcher = Pattern.compile("(\\d{2,4})\\D+(\\d{2,4})").matcher(text)
+        if (coordMatcher.find()) {
+          val x = coordMatcher.group(1).toInt()
+          val y = coordMatcher.group(2).toInt()
+          JSONObject("""{"action":"tap","coordinates":[$x,$y],"reason":"Heuristic tap"}""")
+        } else {
+          JSONObject("""{"action":"wait","reason":"Could not parse response"}""")
+        }
       }
     }
   }
