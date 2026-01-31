@@ -75,9 +75,16 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
         ensureModelReady()
 
         if (shouldOpenSettings(goal)) {
-          sendEvent(EVENT_LOG, "Shortcut: opening Settings")
-          openSettings()
-          delay(800)
+          val opened = openRelevantSettings(goal)
+          if (opened) {
+            delay(1000)
+            val toggled = tryToggleSetting(goal)
+            if (toggled) {
+              sendEvent(EVENT_DONE, "Toggled setting")
+              return@launch
+            }
+            // Continue with limited agent steps if toggle not found
+          }
         }
 
         val maxSteps = 3
@@ -278,15 +285,45 @@ JSON:
       lower.contains("wifi")
   }
 
-  private fun openSettings() {
+  private fun openRelevantSettings(goal: String): Boolean {
+    val lower = goal.lowercase()
+    return when {
+      lower.contains("bluetooth") -> {
+        sendEvent(EVENT_LOG, "Shortcut: opening Bluetooth settings")
+        openSettingsIntent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+      }
+      lower.contains("wi-fi") || lower.contains("wifi") -> {
+        sendEvent(EVENT_LOG, "Shortcut: opening Wi-Fi settings")
+        openSettingsIntent(android.provider.Settings.ACTION_WIFI_SETTINGS)
+      }
+      else -> {
+        sendEvent(EVENT_LOG, "Shortcut: opening Settings")
+        openSettingsIntent(android.provider.Settings.ACTION_SETTINGS)
+      }
+    }
+  }
+
+  private fun openSettingsIntent(action: String): Boolean {
     try {
-      val intent = android.content.Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+      val intent = android.content.Intent(action).apply {
         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
       }
       reactContext.startActivity(intent)
+      return true
     } catch (e: Exception) {
       sendEvent(EVENT_LOG, "Failed to open Settings: ${e.message}")
+      return false
     }
+  }
+
+  private fun tryToggleSetting(goal: String): Boolean {
+    val service = AgentAccessibilityService.instance ?: return false
+    val lower = goal.lowercase()
+    val keyword = if (lower.contains("bluetooth")) "bluetooth" else if (lower.contains("wi-fi") || lower.contains("wifi")) "wi-fi" else "settings"
+    val node = service.findToggleNode(keyword) ?: return false
+    val handled = node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
+    sendEvent(EVENT_LOG, "Tried toggle for $keyword: ${if (handled) "clicked" else "not clickable"}")
+    return handled
   }
 
   private fun shrinkContext(screenContext: String): String {

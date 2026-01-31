@@ -10,6 +10,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 
 class AgentAccessibilityService : AccessibilityService() {
 
@@ -106,6 +107,32 @@ class AgentAccessibilityService : AccessibilityService() {
   fun findEditableNode(): AccessibilityNodeInfo? {
     val root = rootInActiveWindow ?: return null
     return findNode(root) { it.isEditable }
+  }
+
+  fun findToggleNode(keyword: String): AccessibilityNodeInfo? {
+    val root = rootInActiveWindow ?: return null
+    val lower = keyword.lowercase(Locale.getDefault())
+    val match = findNode(root) { node ->
+      val text = node.text?.toString()?.lowercase(Locale.getDefault()).orEmpty()
+      val desc = node.contentDescription?.toString()?.lowercase(Locale.getDefault()).orEmpty()
+      text.contains(lower) || desc.contains(lower)
+    } ?: return null
+
+    // Prefer a Switch/CompoundButton in the matched subtree
+    val toggle = findNode(match) { node ->
+      val cls = node.className?.toString().orEmpty()
+      cls.contains("Switch") || cls.contains("CompoundButton")
+    }
+    if (toggle != null) return toggle
+
+    // Fallback: clickable node or clickable parent
+    if (match.isClickable) return match
+    var parent = match.parent
+    while (parent != null) {
+      if (parent.isClickable) return parent
+      parent = parent.parent
+    }
+    return null
   }
 
   private fun findNode(
