@@ -12,6 +12,7 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.extensions.LLM.LLMGenerationOptions
+import com.runanywhere.sdk.public.extensions.LLM.StructuredOutputConfig
 import com.runanywhere.sdk.public.extensions.downloadModel
 import com.runanywhere.sdk.public.extensions.generate
 import com.runanywhere.sdk.public.extensions.loadLLMModel
@@ -144,12 +145,32 @@ SCREEN_CONTEXT: $trimmedContext
 JSON:
     """.trimIndent()
 
+    val schema = """
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "action": { "type": "string", "enum": ["tap","type","enter","swipe","home","back","wait","done"] },
+    "coordinates": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+    "text": { "type": "string" },
+    "direction": { "type": "string", "enum": ["up","down","left","right"] },
+    "reason": { "type": "string" }
+  },
+  "required": ["action","reason"]
+}
+    """.trimIndent()
+
     val options = LLMGenerationOptions(
       maxTokens = 32,
       temperature = 0.1f,
       topP = 0.9f,
       streamingEnabled = false,
-      systemPrompt = systemPrompt
+      systemPrompt = systemPrompt,
+      structuredOutput = StructuredOutputConfig(
+        typeName = "AgentAction",
+        includeSchemaInPrompt = true,
+        jsonSchema = schema
+      )
     )
 
     return try {
@@ -169,12 +190,12 @@ JSON:
       .replace("```", "")
       .trim()
     return try {
-      JSONObject(cleaned)
+      normalizeDecision(JSONObject(cleaned))
     } catch (_: JSONException) {
       val matcher = Pattern.compile("\\{.*?\\}", Pattern.DOTALL).matcher(cleaned)
       if (matcher.find()) {
         try {
-          JSONObject(matcher.group())
+          normalizeDecision(JSONObject(matcher.group()))
         } catch (_: JSONException) {
           sendEvent(EVENT_LOG, "LLM raw (truncated): ${cleaned.take(200)}")
           heuristicDecision(cleaned)
@@ -184,6 +205,29 @@ JSON:
         heuristicDecision(cleaned)
       }
     }
+  }
+
+  private fun normalizeDecision(obj: JSONObject): JSONObject {
+    val action = obj.optString("action", "").trim()
+    if (action.isEmpty()) {
+      return heuristicDecision(obj.toString())
+    }
+    // Normalize coordinates if present
+    val coords = obj.optJSONArray("coordinates")
+    if (coords != null && coords.length() == 2) {
+      val x = coords.optString(0, "").trim()
+      val y = coords.optString(1, "").trim()
+      if (x.isNotEmpty() && y.isNotEmpty()) {
+        val xi = x.toIntOrNull()
+        val yi = y.toIntOrNull()
+        if (xi != null && yi != null) {
+          obj.put("coordinates", listOf(xi, yi))
+        } else {
+          obj.remove("coordinates")
+        }
+      }
+    }
+    return obj
   }
 
   private fun heuristicDecision(text: String): JSONObject {
