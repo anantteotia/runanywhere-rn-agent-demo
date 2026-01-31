@@ -1,10 +1,24 @@
-import React from 'react';
+import React, {useEffect, useRef} from 'react';
 import {ScrollView, StyleSheet, Text} from 'react-native';
 
-export function OutputPanel(): React.JSX.Element {
+interface Props {
+  output: string;
+}
+
+export function OutputPanel({output}: Props): React.JSX.Element {
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (output) {
+      scrollRef.current?.scrollToEnd({animated: true});
+    }
+  }, [output]);
+
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.placeholder}>Agent output will appear here.</Text>
+    <ScrollView ref={scrollRef} style={styles.container}>
+      <Text style={styles.text}>
+        {output || 'Agent output will appear here.'}
+      </Text>
     </ScrollView>
   );
 }
@@ -17,8 +31,10 @@ const styles = StyleSheet.create({
     margin: 12,
     borderRadius: 8,
   },
-  placeholder: {
-    color: '#888',
+  text: {
+    color: '#c8d6e5',
     fontFamily: 'monospace',
+    fontSize: 13,
+    lineHeight: 20,
   },
 });

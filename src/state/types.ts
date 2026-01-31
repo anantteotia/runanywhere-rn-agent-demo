@@ -1,11 +1,16 @@
-export type AgentStatus = 'idle' | 'running' | 'error';
+export type AgentState =
+  | {phase: 'idle'}
+  | {phase: 'downloading'; progress: number}
+  | {phase: 'loading'}
+  | {phase: 'running'; partialOutput: string}
+  | {phase: 'done'; finalOutput: string}
+  | {phase: 'error'; message: string};
 
-export interface AgentMessage {
-  id: string;
-  type: 'text' | 'tool_use' | 'error' | 'done';
-  content: string;
-  timestamp: number;
-}
+export type AgentEvent =
+  | {type: 'download_progress'; progress: number}
+  | {type: 'token'; text: string}
+  | {type: 'done'}
+  | {type: 'error'; message: string};
 
 export interface RunAnywhereConfig {
   apiKey: string;
