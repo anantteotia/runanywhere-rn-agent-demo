@@ -69,6 +69,23 @@ cd G:\Code\runanywhere-sdks\sdk\runanywhere-kotlin
 - Observe streaming output
 - Tap Stop to cancel generation
 
+## Demo Screenshots
+
+Idle  
+![Idle](docs/screenshots/Idle.jpeg)
+
+Downloading  
+![Downloading](docs/screenshots/Downloading.jpeg)
+
+Loading  
+![Loading](docs/screenshots/Loading.jpeg)
+
+Running  
+![Running](docs/screenshots/Running.jpeg)
+
+Done  
+![Done](docs/screenshots/Done.jpeg)
+
 ---
 
 Built for the RunAnywhere Agent demo.
