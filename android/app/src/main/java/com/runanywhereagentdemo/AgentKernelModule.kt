@@ -13,7 +13,7 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.extensions.LLM.LLMGenerationOptions
 import com.runanywhere.sdk.public.extensions.downloadModel
-import com.runanywhere.sdk.public.extensions.generateStream
+import com.runanywhere.sdk.public.extensions.generate
 import com.runanywhere.sdk.public.extensions.loadLLMModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -79,8 +79,8 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
             ?: throw IllegalStateException("Accessibility service not connected")
 
           val screenContext = service.getInteractiveElementsJson(
-            maxElements = 80,
-            maxTextLength = 60
+            maxElements = 40,
+            maxTextLength = 40
           )
           val decisionJson = decideNextAction(goal, screenContext)
           val decision = parseDecision(decisionJson)
@@ -119,7 +119,10 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
       sendEvent(EVENT_LOG, "Model loaded")
     } catch (e: Exception) {
       sendEvent(EVENT_LOG, "Downloading model...")
-      RunAnywhere.downloadModel(MODEL_ID).collect { /* ignore progress */ }
+      RunAnywhere.downloadModel(MODEL_ID).collect { progress ->
+        val percent = (progress.progress * 100).toInt()
+        sendEvent(EVENT_LOG, "Downloading model... $percent%")
+      }
       RunAnywhere.loadLLMModel(MODEL_ID)
       sendEvent(EVENT_LOG, "Model loaded")
     }
@@ -146,19 +149,16 @@ Actions:
     val userPrompt = "GOAL: $goal\n\nSCREEN_CONTEXT:\n$trimmedContext"
 
     val options = LLMGenerationOptions(
-      maxTokens = 128,
+      maxTokens = 80,
       temperature = 0.1f,
       topP = 0.9f,
-      streamingEnabled = true,
+      streamingEnabled = false,
       systemPrompt = systemPrompt
     )
 
     return try {
-      val buffer = StringBuilder()
-      RunAnywhere.generateStream(userPrompt, options).collect { token ->
-        buffer.append(token)
-      }
-      buffer.toString()
+      val result = RunAnywhere.generate(userPrompt, options)
+      result.text
     } catch (e: Exception) {
       Log.e(TAG, "Decision generation failed: ${e.message}", e)
       "{\"action\":\"wait\",\"reason\":\"LLM not ready\"}"
@@ -179,7 +179,7 @@ Actions:
   }
 
   private fun shrinkContext(screenContext: String): String {
-    val maxChars = 5000
+    val maxChars = 2500
     return if (screenContext.length <= maxChars) {
       screenContext
     } else {
