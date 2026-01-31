@@ -66,6 +66,11 @@ yarn-error.log
 # testing
 /coverage
 
+# Agent demo (python)
+agent/.env
+agent/.venv/
+agent/__pycache__/
+
 # Yarn
 .yarn/*
 !.yarn/patches

@@ -69,6 +69,41 @@ cd G:\Code\runanywhere-sdks\sdk\runanywhere-kotlin
 - Observe streaming output
 - Tap Stop to cancel generation
 
+## Agent Demo (Android Action Kernel style)
+
+This repo includes a **Python-based Android agent** (ADB + accessibility tree) in `agent/`.  
+It can control native apps on a connected Android device.
+
+### Prerequisites
+- Python 3.10+
+- ADB installed
+- Android device with USB debugging enabled
+
+### Run the agent
+
+```sh
+cd agent
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+```
+
+Edit `.env` and set:
+- `OPENAI_API_KEY` (or switch `LLM_PROVIDER` + keys)
+- `DEVICE_ID` (from `adb devices`)
+
+Then run:
+
+```sh
+python kernel.py
+```
+
+Example goal:
+```
+Open the Settings app and turn on Wi‑Fi
+```
+
 ## Demo Screenshots
 
 Idle  
