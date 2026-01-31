@@ -74,12 +74,6 @@ cd G:\Code\runanywhere-sdks\sdk\runanywhere-kotlin
 Idle  
 ![Idle](docs/screenshots/Idle.jpeg)
 
-Downloading  
-![Downloading](docs/screenshots/Downloading.jpeg)
-
-Loading  
-![Loading](docs/screenshots/Loading.jpeg)
-
 Running  
 ![Running](docs/screenshots/Running.jpeg)
 
