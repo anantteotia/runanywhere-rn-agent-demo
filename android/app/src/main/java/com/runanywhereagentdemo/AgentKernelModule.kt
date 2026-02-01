@@ -81,6 +81,8 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
             sendEvent(EVENT_DONE, "Opened app: $appName")
             return@launch
           }
+          sendEvent(EVENT_ERROR, "App not found: $appName")
+          return@launch
         }
 
         if (shouldOpenSettings(goal)) {
@@ -88,11 +90,11 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
           if (opened) {
             delay(1000)
             val toggled = tryToggleSetting(goal)
-            if (toggled) {
-              sendEvent(EVENT_DONE, "Toggled setting")
-              return@launch
-            }
-            // Continue with limited agent steps if toggle not found
+            sendEvent(
+              EVENT_DONE,
+              if (toggled) "Toggled setting" else "Opened settings"
+            )
+            return@launch
           }
         }
 
@@ -313,9 +315,16 @@ JSON:
         addCategory(android.content.Intent.CATEGORY_LAUNCHER)
       }
       val apps = pm.queryIntentActivities(intent, 0)
+      val target = normalizeAppToken(appName)
+      if (target.isEmpty()) {
+        sendEvent(EVENT_LOG, "Shortcut: app name empty")
+        return false
+      }
       val match = apps.firstOrNull { info ->
-        val label = info.loadLabel(pm)?.toString()?.lowercase().orEmpty()
-        label.contains(appName.lowercase())
+        val label = info.loadLabel(pm)?.toString().orEmpty()
+        val labelNorm = normalizeAppToken(label)
+        val pkgNorm = normalizeAppToken(info.activityInfo.packageName ?: "")
+        labelNorm.contains(target) || pkgNorm.contains(target)
       }
       if (match != null) {
         val launch = pm.getLaunchIntentForPackage(match.activityInfo.packageName)
@@ -325,15 +334,25 @@ JSON:
           sendEvent(EVENT_LOG, "Shortcut: opening app \"$appName\"")
           true
         } else {
+          sendEvent(EVENT_LOG, "Shortcut: no launch intent for \"$appName\"")
           false
         }
       } else {
+        val examples = apps
+          .mapNotNull { info -> info.loadLabel(pm)?.toString() }
+          .take(5)
+          .joinToString(", ")
+        sendEvent(EVENT_LOG, "Shortcut: app not found \"$appName\". Examples: $examples")
         false
       }
     } catch (e: Exception) {
       sendEvent(EVENT_LOG, "Failed to open app: ${e.message}")
       false
     }
+  }
+
+  private fun normalizeAppToken(value: String): String {
+    return value.lowercase().replace("[^a-z0-9]".toRegex(), "")
   }
 
   private fun openRelevantSettings(goal: String): Boolean {
