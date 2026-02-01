@@ -69,6 +69,7 @@ class MainApplication : Application(), ReactApplication {
     LlamaCPP.register(priority = 100)
     Log.i(TAG, "LlamaCPP backend registered")
 
+    // SmolLM2 360M - Smallest, fastest, least capable
     RunAnywhere.registerModel(
       id = "smollm2-360m-instruct-q8_0",
       name = "SmolLM2 360M Instruct Q8_0",
@@ -76,6 +77,26 @@ class MainApplication : Application(), ReactApplication {
       framework = InferenceFramework.LLAMA_CPP,
       memoryRequirement = 400_000_000,
     )
-    Log.i(TAG, "Default model registered: smollm2-360m-instruct-q8_0")
+    Log.i(TAG, "Model registered: smollm2-360m-instruct-q8_0 (360M)")
+
+    // Qwen2.5 1.5B - High quality, good reasoning
+    RunAnywhere.registerModel(
+      id = "qwen2.5-1.5b-instruct-q4_k_m",
+      name = "Qwen2.5 1.5B Instruct Q4_K_M",
+      url = "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      framework = InferenceFramework.LLAMA_CPP,
+      memoryRequirement = 1_200_000_000,
+    )
+    Log.i(TAG, "Model registered: qwen2.5-1.5b-instruct-q4_k_m (1.5B)")
+
+    // LFM2.5 1.2B - Optimized for edge/mobile, fast inference
+    RunAnywhere.registerModel(
+      id = "lfm2.5-1.2b-instruct-q4_k_m",
+      name = "LFM2.5 1.2B Instruct Q4_K_M",
+      url = "https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/main/LFM2.5-1.2B-Instruct-Q4_K_M.gguf",
+      framework = InferenceFramework.LLAMA_CPP,
+      memoryRequirement = 800_000_000,
+    )
+    Log.i(TAG, "Model registered: lfm2.5-1.2b-instruct-q4_k_m (1.2B)")
   }
 }

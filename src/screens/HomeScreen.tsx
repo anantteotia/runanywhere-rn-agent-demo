@@ -10,7 +10,7 @@ import {
 import {OutputPanel} from '../components/OutputPanel';
 import {Controls} from '../components/Controls';
 import {useAgentRunner} from '../state/useAgentRunner';
-import {useDeviceAgent} from '../state/useDeviceAgent';
+import {useDeviceAgent, getModelLabel} from '../state/useDeviceAgent';
 
 function getOutput(state: ReturnType<typeof useAgentRunner>['state']): string {
   switch (state.phase) {
@@ -122,6 +122,31 @@ export function HomeScreen(): React.JSX.Element {
         <View style={styles.card}>
           <OutputPanel output={output} />
         </View>
+        {mode === 'device' && deviceAgent.availableModels.length > 0 && (
+          <View style={styles.modelCard}>
+            <Text style={styles.modelLabel}>Model:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modelScroll}>
+              {deviceAgent.availableModels.map(modelId => (
+                <TouchableOpacity
+                  key={modelId}
+                  style={[
+                    styles.modelButton,
+                    deviceAgent.activeModel === modelId && styles.modelButtonActive,
+                  ]}
+                  onPress={() => deviceAgent.selectModel(modelId)}
+                  disabled={isRunning}>
+                  <Text
+                    style={[
+                      styles.modelButtonText,
+                      deviceAgent.activeModel === modelId && styles.modelButtonTextActive,
+                    ]}>
+                    {getModelLabel(modelId)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
         <View style={styles.card}>
           {mode === 'device' ? (
             <Controls
@@ -233,5 +258,47 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: {width: 0, height: 4},
     elevation: 3,
+  },
+  modelCard: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(22, 28, 56, 0.7)',
+    borderWidth: 1,
+    borderColor: 'rgba(120, 145, 200, 0.15)',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modelLabel: {
+    color: '#9fb0d6',
+    fontSize: 12,
+    fontWeight: '600',
+    marginRight: 8,
+  },
+  modelScroll: {
+    flexGrow: 0,
+  },
+  modelButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: 'rgba(18, 24, 50, 0.8)',
+    borderWidth: 1,
+    borderColor: 'rgba(120, 145, 200, 0.25)',
+    marginRight: 6,
+  },
+  modelButtonActive: {
+    backgroundColor: '#1f6feb',
+    borderColor: '#1f6feb',
+  },
+  modelButtonText: {
+    color: '#9fb0d6',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  modelButtonTextActive: {
+    color: '#fff',
   },
 });

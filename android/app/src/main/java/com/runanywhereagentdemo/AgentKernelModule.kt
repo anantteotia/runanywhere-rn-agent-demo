@@ -34,7 +34,14 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   companion object {
     const val NAME = "AgentKernel"
     private const val TAG = "AgentKernel"
-    private const val MODEL_ID = "smollm2-360m-instruct-q8_0"
+
+    // Available models (must match IDs registered in MainApplication)
+    val AVAILABLE_MODELS = listOf(
+      "smollm2-360m-instruct-q8_0",      // 360M - fastest, least capable
+      "qwen2.5-1.5b-instruct-q4_k_m",    // 1.5B - best quality
+      "lfm2.5-1.2b-instruct-q4_k_m"      // 1.2B - fast, edge-optimized
+    )
+    private const val DEFAULT_MODEL = "qwen2.5-1.5b-instruct-q4_k_m"
 
     const val EVENT_LOG = "AGENT_LOG"
     const val EVENT_DONE = "AGENT_DONE"
@@ -45,6 +52,7 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   private var runJob: Job? = null
   private var lastAppExamples: String? = null
   private var currentElementMap: Map<Int, Pair<Int, Int>> = emptyMap()
+  private var activeModelId: String = DEFAULT_MODEL
 
   override fun getName(): String = NAME
 
@@ -61,6 +69,29 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   @ReactMethod
   fun isServiceEnabled(promise: Promise) {
     promise.resolve(AgentAccessibilityService.isEnabled(reactContext))
+  }
+
+  @ReactMethod
+  fun getAvailableModels(promise: Promise) {
+    val models = Arguments.createArray()
+    AVAILABLE_MODELS.forEach { models.pushString(it) }
+    promise.resolve(models)
+  }
+
+  @ReactMethod
+  fun getActiveModel(promise: Promise) {
+    promise.resolve(activeModelId)
+  }
+
+  @ReactMethod
+  fun setActiveModel(modelId: String, promise: Promise) {
+    if (modelId in AVAILABLE_MODELS) {
+      activeModelId = modelId
+      Log.i(TAG, "Active model set to: $modelId")
+      promise.resolve(true)
+    } else {
+      promise.reject("INVALID_MODEL", "Model not found: $modelId. Available: ${AVAILABLE_MODELS.joinToString()}")
+    }
   }
 
   @ReactMethod
@@ -158,20 +189,21 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   }
 
   private suspend fun ensureModelReady() {
+    sendEvent(EVENT_LOG, "Using model: $activeModelId")
     try {
-      RunAnywhere.loadLLMModel(MODEL_ID)
+      RunAnywhere.loadLLMModel(activeModelId)
       sendEvent(EVENT_LOG, "Model loaded")
     } catch (e: Exception) {
       sendEvent(EVENT_LOG, "Downloading model...")
       var lastPercent = -1
-      RunAnywhere.downloadModel(MODEL_ID).collect { progress ->
+      RunAnywhere.downloadModel(activeModelId).collect { progress ->
         val percent = (progress.progress * 100).toInt()
         if (percent != lastPercent && percent % 5 == 0) {
           lastPercent = percent
-          sendEvent(EVENT_LOG, "Downloading model... $percent%")
+          sendEvent(EVENT_LOG, "Downloading... $percent%")
         }
       }
-      RunAnywhere.loadLLMModel(MODEL_ID)
+      RunAnywhere.loadLLMModel(activeModelId)
       sendEvent(EVENT_LOG, "Model loaded")
     }
   }

@@ -16,6 +16,18 @@ export function stopAgent(): Promise<void> {
   return AgentKernel.stopAgent();
 }
 
+export function getAvailableModels(): Promise<string[]> {
+  return AgentKernel.getAvailableModels();
+}
+
+export function getActiveModel(): Promise<string> {
+  return AgentKernel.getActiveModel();
+}
+
+export function setActiveModel(modelId: string): Promise<boolean> {
+  return AgentKernel.setActiveModel(modelId);
+}
+
 export function subscribeAgentEvents(
   onLog: (message: string) => void,
   onDone: (message?: string) => void,
