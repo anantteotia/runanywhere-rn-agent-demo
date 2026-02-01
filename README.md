@@ -12,7 +12,7 @@ This is a React Native demo app that uses the **RunAnywhere Kotlin SDK** on Andr
 ## Model (default)
 
 ```
-qwen2.5-0.5b-instruct-q6_k
+smollm2-360m-instruct-q8_0
 ```
 
 Model is registered in `android/app/src/main/java/com/runanywhereagentdemo/MainApplication.kt` and used in `src/state/useAgentRunner.ts`.
@@ -32,7 +32,13 @@ Model is registered in `android/app/src/main/java/com/runanywhereagentdemo/MainA
 npm start
 ```
 
-2. Build & install on device
+2. USB reverse for Metro (device)
+
+```sh
+adb reverse tcp:8081 tcp:8081
+```
+
+3. Build & install on device
 
 ```sh
 npx react-native run-android --device <your-device-id>
@@ -82,8 +88,17 @@ decides the next action with the RunAnywhere LLM, and executes it on the device.
 ### Run the agent
 1. Open the app.
 2. Switch to **Device Agent** mode.
-3. Enter a goal (e.g., `Open Settings and turn on Wi‑Fi`).
+3. Enter a goal (examples below).
 4. Tap **Run Device Agent**.
+
+### Device Agent examples
+- `open Settings`
+- `open Music`
+- `open Odin Launcher`
+- `Open Settings and turn on Bluetooth`
+
+> Note: the app launcher uses the device’s visible app labels. If a target app isn’t found,
+> the agent shows example labels it can open. Use one of those labels exactly.
 
 ## Demo Screenshots
 
