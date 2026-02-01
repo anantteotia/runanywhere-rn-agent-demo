@@ -394,10 +394,21 @@ OUT:{"a":"ACTION","i":INDEX,"t":"text","d":"u/d/l/r"}
 
   private fun extractAppName(goal: String): String? {
     val lower = goal.lowercase().trim()
+    // If the user is asking about settings/Wi-Fi/Bluetooth, skip app shortcut.
+    if (shouldOpenSettings(lower)) return null
     val patterns = listOf("open ", "launch ", "start ")
     for (prefix in patterns) {
       if (lower.startsWith(prefix)) {
-        val name = goal.substring(prefix.length).trim()
+        var name = goal.substring(prefix.length).trim()
+        // Stop at conjunctions like "and"/"then" to avoid swallowing multi-step goals.
+        val separators = listOf(" and ", " then ", ",")
+        for (sep in separators) {
+          val idx = name.lowercase().indexOf(sep)
+          if (idx >= 0) {
+            name = name.substring(0, idx).trim()
+            break
+          }
+        }
         if (name.isNotEmpty()) return name
       }
     }
