@@ -74,6 +74,15 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
         sendEvent(EVENT_LOG, "Agent started")
         ensureModelReady()
 
+        val appName = extractAppName(goal)
+        if (appName != null) {
+          val opened = openAppByName(appName)
+          if (opened) {
+            sendEvent(EVENT_DONE, "Opened app: $appName")
+            return@launch
+          }
+        }
+
         if (shouldOpenSettings(goal)) {
           val opened = openRelevantSettings(goal)
           if (opened) {
@@ -283,6 +292,48 @@ JSON:
       lower.contains("bluetooth") ||
       lower.contains("wi-fi") ||
       lower.contains("wifi")
+  }
+
+  private fun extractAppName(goal: String): String? {
+    val lower = goal.lowercase().trim()
+    val patterns = listOf("open ", "launch ", "start ")
+    for (prefix in patterns) {
+      if (lower.startsWith(prefix)) {
+        val name = goal.substring(prefix.length).trim()
+        if (name.isNotEmpty()) return name
+      }
+    }
+    return null
+  }
+
+  private fun openAppByName(appName: String): Boolean {
+    return try {
+      val pm = reactContext.packageManager
+      val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+        addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+      }
+      val apps = pm.queryIntentActivities(intent, 0)
+      val match = apps.firstOrNull { info ->
+        val label = info.loadLabel(pm)?.toString()?.lowercase().orEmpty()
+        label.contains(appName.lowercase())
+      }
+      if (match != null) {
+        val launch = pm.getLaunchIntentForPackage(match.activityInfo.packageName)
+        launch?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (launch != null) {
+          reactContext.startActivity(launch)
+          sendEvent(EVENT_LOG, "Shortcut: opening app \"$appName\"")
+          true
+        } else {
+          false
+        }
+      } else {
+        false
+      }
+    } catch (e: Exception) {
+      sendEvent(EVENT_LOG, "Failed to open app: ${e.message}")
+      false
+    }
   }
 
   private fun openRelevantSettings(goal: String): Boolean {
