@@ -43,6 +43,7 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
 
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private var runJob: Job? = null
+  private var lastAppExamples: String? = null
 
   override fun getName(): String = NAME
 
@@ -81,7 +82,13 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
             sendEvent(EVENT_DONE, "Opened app: $appName")
             return@launch
           }
-          sendEvent(EVENT_ERROR, "App not found: $appName")
+          val examples = lastAppExamples
+          val message = if (!examples.isNullOrBlank()) {
+            "App not found: $appName. Try: $examples"
+          } else {
+            "App not found: $appName"
+          }
+          sendEvent(EVENT_ERROR, message)
           return@launch
         }
 
@@ -340,8 +347,10 @@ JSON:
       } else {
         val examples = apps
           .mapNotNull { info -> info.loadLabel(pm)?.toString() }
+          .distinct()
           .take(5)
           .joinToString(", ")
+        lastAppExamples = examples
         sendEvent(EVENT_LOG, "Shortcut: app not found \"$appName\". Examples: $examples")
         false
       }
