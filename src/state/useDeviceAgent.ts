@@ -80,19 +80,31 @@ export function useDeviceAgent() {
     }
 
     const pushLine = (message: string) => {
+      const trimmedMessage = message.trim();
       const lines = outputRef.current
         .split('\n')
         .map(line => line.trim())
         .filter(line => line.length > 0);
 
-      if (message.startsWith('Downloading model')) {
-        if (lines.length > 0 && lines[lines.length - 1].startsWith('Downloading model')) {
-          lines[lines.length - 1] = message;
+      if (lines.length > 0 && lines[lines.length - 1] === trimmedMessage) {
+        // Skip duplicate log lines
+      } else if (
+        trimmedMessage.startsWith('Downloading') ||
+        trimmedMessage.startsWith('Downloading model') ||
+        trimmedMessage.startsWith('Model download')
+      ) {
+        if (
+          lines.length > 0 &&
+          (lines[lines.length - 1].startsWith('Downloading') ||
+            lines[lines.length - 1].startsWith('Downloading model') ||
+            lines[lines.length - 1].startsWith('Model download'))
+        ) {
+          lines[lines.length - 1] = trimmedMessage;
         } else {
-          lines.push(message);
+          lines.push(trimmedMessage);
         }
       } else {
-        lines.push(message);
+        lines.push(trimmedMessage);
       }
 
       // Keep log size reasonable
