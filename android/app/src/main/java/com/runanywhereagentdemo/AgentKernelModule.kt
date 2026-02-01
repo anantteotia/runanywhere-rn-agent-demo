@@ -44,6 +44,7 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private var runJob: Job? = null
   private var lastAppExamples: String? = null
+  private var currentElementMap: Map<Int, Pair<Int, Int>> = emptyMap()
 
   override fun getName(): String = NAME
 
@@ -105,32 +106,34 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
           }
         }
 
-        val maxSteps = 12
-        val maxDurationMs = 60_000L
+        val maxSteps = 10
+        val maxDurationMs = 45_000L
         val startTime = System.currentTimeMillis()
         var step = 0
         while (step < maxSteps) {
           step += 1
-          sendEvent(EVENT_LOG, "Step $step: scanning screen")
+          sendEvent(EVENT_LOG, "Step $step")
           val service = AgentAccessibilityService.instance
             ?: throw IllegalStateException("Accessibility service not connected")
 
-          val screenContext = service.getInteractiveElementsJson(
-            maxElements = 12,
-            maxTextLength = 24
+          // Get compact screen state with element index map
+          val (screenState, elementMap) = service.getCompactScreenState(
+            maxElements = 8,
+            maxTextLength = 16
           )
-          val decisionJson = decideNextAction(goal, screenContext)
-          val decision = parseDecision(decisionJson)
+          currentElementMap = elementMap
 
-          val reason = decision.optString("reason", "No reason")
-          sendEvent(EVENT_LOG, "Decision: ${decision.optString("action", "unknown")} - $reason")
+          val decisionJson = decideNextAction(goal, screenState)
+          val decision = parseDecision(decisionJson, currentElementMap)
+
+          sendEvent(EVENT_LOG, "Action: ${decision.optString("action", "unknown")}")
           executeDecision(service, decision)
 
           if (decision.optString("action") == "done") {
             sendEvent(EVENT_DONE, "Goal achieved")
             return@launch
           }
-          delay(1200)
+          delay(1000)
           if (System.currentTimeMillis() - startTime > maxDurationMs) {
             sendEvent(EVENT_DONE, "Max duration reached")
             return@launch
@@ -173,40 +176,38 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
-  private suspend fun decideNextAction(goal: String, screenContext: String): String {
-    val systemPrompt = null
-    val trimmedContext = shrinkContext(screenContext)
+  private suspend fun decideNextAction(goal: String, screenState: String): String {
+    // Compact prompt optimized for small LLMs (~80 tokens)
     val userPrompt = """
-Return ONLY one JSON line with the next action.
-Actions: tap(with coordinates), type(text), enter, swipe(direction), home, back, wait, done.
-GOAL: $goal
-SCREEN_CONTEXT: $trimmedContext
-JSON:
+GOAL:$goal
+SCREEN:
+$screenState
+ACT:tap,type,swipe,back,home,done
+OUT:{"a":"ACTION","i":INDEX,"t":"text","d":"u/d/l/r"}
     """.trimIndent()
 
+    // Minimal schema with short field names
     val schema = """
 {
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "action": { "type": "string", "enum": ["tap","type","enter","swipe","home","back","wait","done"] },
-    "coordinates": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
-    "text": { "type": "string" },
-    "direction": { "type": "string", "enum": ["up","down","left","right"] },
-    "reason": { "type": "string" }
+  "type":"object",
+  "properties":{
+    "a":{"type":"string","enum":["tap","type","swipe","back","home","done"]},
+    "i":{"type":"integer"},
+    "t":{"type":"string"},
+    "d":{"type":"string","enum":["u","d","l","r"]}
   },
-  "required": ["action","reason"]
+  "required":["a"]
 }
     """.trimIndent()
 
     val options = LLMGenerationOptions(
-      maxTokens = 32,
-      temperature = 0.1f,
-      topP = 0.9f,
+      maxTokens = 24,
+      temperature = 0.0f,
+      topP = 0.95f,
       streamingEnabled = false,
-      systemPrompt = systemPrompt,
+      systemPrompt = null,
       structuredOutput = StructuredOutputConfig(
-        typeName = "AgentAction",
+        typeName = "Act",
         includeSchemaInPrompt = true,
         jsonSchema = schema
       )
@@ -219,85 +220,133 @@ JSON:
       result.text
     } catch (e: Exception) {
       Log.e(TAG, "Decision generation failed: ${e.message}", e)
-      "{\"action\":\"wait\",\"reason\":\"LLM not ready\"}"
+      "{\"a\":\"done\"}"
     }
   }
 
-  private fun parseDecision(text: String): JSONObject {
+  private fun parseDecision(text: String, elementMap: Map<Int, Pair<Int, Int>>): JSONObject {
     val cleaned = text
       .replace("```json", "")
       .replace("```", "")
       .trim()
-    return try {
-      normalizeDecision(JSONObject(cleaned))
-    } catch (_: JSONException) {
-      val matcher = Pattern.compile("\\{.*?\\}", Pattern.DOTALL).matcher(cleaned)
-      if (matcher.find()) {
-        try {
-          normalizeDecision(JSONObject(matcher.group()))
-        } catch (_: JSONException) {
-          sendEvent(EVENT_LOG, "LLM raw (truncated): ${cleaned.take(200)}")
-          heuristicDecision(cleaned)
-        }
-      } else {
-        sendEvent(EVENT_LOG, "LLM raw (truncated): ${cleaned.take(200)}")
-        heuristicDecision(cleaned)
-      }
+
+    // Try parsing as compact JSON format first
+    try {
+      val obj = JSONObject(cleaned)
+      return expandCompactDecision(obj, elementMap)
+    } catch (_: JSONException) {}
+
+    // Try extracting JSON from text
+    val matcher = Pattern.compile("\\{.*?\\}", Pattern.DOTALL).matcher(cleaned)
+    if (matcher.find()) {
+      try {
+        return expandCompactDecision(JSONObject(matcher.group()), elementMap)
+      } catch (_: JSONException) {}
     }
+
+    // Fallback to heuristic parsing
+    sendEvent(EVENT_LOG, "Heuristic: ${cleaned.take(60)}")
+    return heuristicDecision(cleaned, elementMap)
   }
 
-  private fun normalizeDecision(obj: JSONObject): JSONObject {
-    val action = obj.optString("action", "").trim()
-    if (action.isEmpty()) {
-      return heuristicDecision(obj.toString())
-    }
-    // Normalize coordinates if present
-    val coords = obj.optJSONArray("coordinates")
-    if (coords != null && coords.length() == 2) {
-      val x = coords.optString(0, "").trim()
-      val y = coords.optString(1, "").trim()
-      if (x.isNotEmpty() && y.isNotEmpty()) {
-        val xi = x.toIntOrNull()
-        val yi = y.toIntOrNull()
-        if (xi != null && yi != null) {
-          obj.put("coordinates", listOf(xi, yi))
+  private fun expandCompactDecision(obj: JSONObject, elementMap: Map<Int, Pair<Int, Int>>): JSONObject {
+    // Handle both compact ("a") and legacy ("action") field names
+    val action = obj.optString("a", "").ifEmpty { obj.optString("action", "") }
+    val result = JSONObject()
+
+    when (action) {
+      "tap" -> {
+        val idx = obj.optInt("i", -1)
+        val coords = elementMap[idx]
+        if (coords != null) {
+          result.put("action", "tap")
+          result.put("coordinates", org.json.JSONArray().put(coords.first).put(coords.second))
         } else {
-          obj.remove("coordinates")
+          // Fallback: check for legacy coordinates
+          val legacyCoords = obj.optJSONArray("coordinates")
+          if (legacyCoords != null && legacyCoords.length() == 2) {
+            result.put("action", "tap")
+            result.put("coordinates", legacyCoords)
+          } else {
+            result.put("action", "done")
+          }
+        }
+      }
+      "type" -> {
+        result.put("action", "type")
+        result.put("text", obj.optString("t", "").ifEmpty { obj.optString("text", "") })
+      }
+      "swipe" -> {
+        result.put("action", "swipe")
+        val d = obj.optString("d", "").ifEmpty { obj.optString("direction", "up") }
+        result.put("direction", when (d) {
+          "u", "up" -> "up"
+          "d", "down" -> "down"
+          "l", "left" -> "left"
+          "r", "right" -> "right"
+          else -> "up"
+        })
+      }
+      "back" -> result.put("action", "back")
+      "home" -> result.put("action", "home")
+      "done" -> result.put("action", "done")
+      "wait" -> result.put("action", "wait")
+      else -> result.put("action", "done")
+    }
+    return result
+  }
+
+  private fun heuristicDecision(text: String, elementMap: Map<Int, Pair<Int, Int>>): JSONObject {
+    val lower = text.lowercase()
+
+    // Look for tap with index
+    if (lower.contains("tap")) {
+      val idxMatch = Regex("\\d+").find(text)
+      val idx = idxMatch?.value?.toIntOrNull()
+      if (idx != null && elementMap.containsKey(idx)) {
+        val coords = elementMap[idx]!!
+        return JSONObject().apply {
+          put("action", "tap")
+          put("coordinates", org.json.JSONArray().put(coords.first).put(coords.second))
         }
       }
     }
-    return obj
-  }
 
-  private fun heuristicDecision(text: String): JSONObject {
-    val lower = text.lowercase()
+    // Look for type with quoted text
+    if (lower.contains("type")) {
+      val match = Regex("\"([^\"]+)\"").find(text)
+      val value = match?.groupValues?.getOrNull(1) ?: ""
+      return JSONObject().apply {
+        put("action", "type")
+        put("text", value)
+      }
+    }
+
+    // Simple action keywords
     return when {
-      lower.contains("home") -> JSONObject("""{"action":"home","reason":"Heuristic home"}""")
-      lower.contains("back") -> JSONObject("""{"action":"back","reason":"Heuristic back"}""")
-      lower.contains("done") -> JSONObject("""{"action":"done","reason":"Heuristic done"}""")
-      lower.contains("wait") -> JSONObject("""{"action":"wait","reason":"Heuristic wait"}""")
+      lower.contains("done") -> JSONObject().put("action", "done")
+      lower.contains("back") -> JSONObject().put("action", "back")
+      lower.contains("home") -> JSONObject().put("action", "home")
       lower.contains("swipe") -> {
         val dir = when {
-          lower.contains("left") -> "left"
-          lower.contains("right") -> "right"
-          lower.contains("down") -> "down"
-          else -> "up"
+          lower.contains("up") || lower.contains(" u ") -> "up"
+          lower.contains("down") || lower.contains(" d ") -> "down"
+          lower.contains("left") || lower.contains(" l ") -> "left"
+          else -> "right"
         }
-        JSONObject("""{"action":"swipe","direction":"$dir","reason":"Heuristic swipe"}""")
-      }
-      lower.contains("type") -> {
-        val matcher = Pattern.compile("\"([^\"]{1,80})\"").matcher(text)
-        val value = if (matcher.find()) matcher.group(1) else ""
-        JSONObject("""{"action":"type","text":"$value","reason":"Heuristic type"}""")
+        JSONObject().put("action", "swipe").put("direction", dir)
       }
       else -> {
-        val coordMatcher = Pattern.compile("(\\d{2,4})\\D+(\\d{2,4})").matcher(text)
-        if (coordMatcher.find()) {
-          val x = coordMatcher.group(1).toInt()
-          val y = coordMatcher.group(2).toInt()
-          JSONObject("""{"action":"tap","coordinates":[$x,$y],"reason":"Heuristic tap"}""")
+        // Last resort: look for any index number and tap it
+        val anyIdx = Regex("\\d+").find(text)?.value?.toIntOrNull()
+        if (anyIdx != null && elementMap.containsKey(anyIdx)) {
+          val coords = elementMap[anyIdx]!!
+          JSONObject().apply {
+            put("action", "tap")
+            put("coordinates", org.json.JSONArray().put(coords.first).put(coords.second))
+          }
         } else {
-          JSONObject("""{"action":"wait","reason":"Could not parse response"}""")
+          JSONObject().put("action", "done")
         }
       }
     }
@@ -411,15 +460,6 @@ JSON:
     val handled = node.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
     sendEvent(EVENT_LOG, "Tried toggle for $keyword: ${if (handled) "clicked" else "not clickable"}")
     return handled
-  }
-
-  private fun shrinkContext(screenContext: String): String {
-    val maxChars = 800
-    return if (screenContext.length <= maxChars) {
-      screenContext
-    } else {
-      screenContext.substring(0, maxChars) + "\n...truncated..."
-    }
   }
 
   private fun executeDecision(service: AgentAccessibilityService, decision: JSONObject) {

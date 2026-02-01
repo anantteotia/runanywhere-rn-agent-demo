@@ -156,4 +156,65 @@ class AgentAccessibilityService : AccessibilityService() {
       focused.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
     }
   }
+
+  /**
+   * Returns a compact, line-based screen state optimized for small LLMs.
+   * Format: "0:Label [tap,edit]\n1:Label [tap]\n..."
+   * Also returns a map of index -> (centerX, centerY) for coordinate resolution.
+   */
+  fun getCompactScreenState(
+    maxElements: Int = 8,
+    maxTextLength: Int = 16
+  ): Pair<String, Map<Int, Pair<Int, Int>>> {
+    val root = rootInActiveWindow ?: return Pair("", emptyMap())
+    val lines = mutableListOf<String>()
+    val indexMap = mutableMapOf<Int, Pair<Int, Int>>()
+    traverseForCompact(root, lines, indexMap, maxElements, maxTextLength)
+    return Pair(lines.joinToString("\n"), indexMap.toMap())
+  }
+
+  private fun traverseForCompact(
+    node: AccessibilityNodeInfo,
+    lines: MutableList<String>,
+    indexMap: MutableMap<Int, Pair<Int, Int>>,
+    maxElements: Int,
+    maxTextLength: Int
+  ) {
+    if (lines.size >= maxElements) return
+
+    val text = node.text?.toString()?.trim()?.take(maxTextLength) ?: ""
+    val desc = node.contentDescription?.toString()?.trim()?.take(maxTextLength) ?: ""
+    val label = text.ifEmpty { desc }
+    val clickable = node.isClickable
+    val editable = node.isEditable
+    val enabled = node.isEnabled
+
+    // Only include interactive or labeled elements
+    if (enabled && (label.isNotEmpty() || clickable || editable)) {
+      val bounds = Rect()
+      node.getBoundsInScreen(bounds)
+      // Skip elements with invalid bounds
+      if (bounds.width() > 0 && bounds.height() > 0) {
+        val cx = (bounds.left + bounds.right) / 2
+        val cy = (bounds.top + bounds.bottom) / 2
+
+        val caps = mutableListOf<String>()
+        if (clickable) caps.add("tap")
+        if (editable) caps.add("edit")
+
+        val idx = lines.size
+        val capsStr = if (caps.isNotEmpty()) " [${caps.joinToString(",")}]" else ""
+        val displayLabel = label.ifEmpty { "btn" }
+        lines.add("$idx:$displayLabel$capsStr")
+        indexMap[idx] = Pair(cx, cy)
+      }
+    }
+
+    for (i in 0 until node.childCount) {
+      if (lines.size >= maxElements) return
+      node.getChild(i)?.let { child ->
+        traverseForCompact(child, lines, indexMap, maxElements, maxTextLength)
+      }
+    }
+  }
 }
