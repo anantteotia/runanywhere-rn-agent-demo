@@ -105,9 +105,13 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
           }
         }
 
-        val maxSteps = 3
-        for (step in 1..maxSteps) {
-          sendEvent(EVENT_LOG, "Step $step/$maxSteps: scanning screen")
+        val maxSteps = 12
+        val maxDurationMs = 60_000L
+        val startTime = System.currentTimeMillis()
+        var step = 0
+        while (step < maxSteps) {
+          step += 1
+          sendEvent(EVENT_LOG, "Step $step: scanning screen")
           val service = AgentAccessibilityService.instance
             ?: throw IllegalStateException("Accessibility service not connected")
 
@@ -127,6 +131,10 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
             return@launch
           }
           delay(1200)
+          if (System.currentTimeMillis() - startTime > maxDurationMs) {
+            sendEvent(EVENT_DONE, "Max duration reached")
+            return@launch
+          }
         }
         sendEvent(EVENT_DONE, "Max steps reached")
       } catch (e: CancellationException) {
