@@ -107,6 +107,17 @@ class AgentKernelModule(private val reactContext: ReactApplicationContext) :
         sendEvent(EVENT_LOG, "Agent started")
         ensureModelReady()
 
+        val packageName = extractPackageName(goal)
+        if (packageName != null) {
+          val opened = openAppByPackage(packageName)
+          if (opened) {
+            sendEvent(EVENT_DONE, "Opened package: $packageName")
+            return@launch
+          }
+          sendEvent(EVENT_ERROR, "Package not found: $packageName")
+          return@launch
+        }
+
         val appName = extractAppName(goal)
         if (appName != null) {
           val opened = openAppByName(appName)
@@ -413,6 +424,35 @@ OUT:{"a":"ACTION","i":INDEX,"t":"text","d":"u/d/l/r"}
       }
     }
     return null
+  }
+
+  private fun extractPackageName(goal: String): String? {
+    val lower = goal.lowercase().trim()
+    val prefix = "open package "
+    if (lower.startsWith(prefix)) {
+      val name = goal.substring(prefix.length).trim()
+      if (name.isNotEmpty()) return name
+    }
+    return null
+  }
+
+  private fun openAppByPackage(packageName: String): Boolean {
+    return try {
+      val pm = reactContext.packageManager
+      val launch = pm.getLaunchIntentForPackage(packageName)
+      launch?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+      if (launch != null) {
+        reactContext.startActivity(launch)
+        sendEvent(EVENT_LOG, "Shortcut: opening package \"$packageName\"")
+        true
+      } else {
+        sendEvent(EVENT_LOG, "Shortcut: no launch intent for package \"$packageName\"")
+        false
+      }
+    } catch (e: Exception) {
+      sendEvent(EVENT_LOG, "Failed to open package: ${e.message}")
+      false
+    }
   }
 
   private fun openAppByName(appName: String): Boolean {
