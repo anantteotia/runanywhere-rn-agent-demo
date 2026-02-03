@@ -230,14 +230,39 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     fun pressEnter(): Boolean {
+        return submit()
+    }
+
+    fun submit(): Boolean {
         val root = rootInActiveWindow ?: return false
-        val focused = findNode(root) { it.isFocused }
-        if (focused != null) {
-            val clicked = focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            if (clicked) return true
+
+        // Prefer IME action on the currently editable field (when available).
+        val editable = findNode(root) { it.isEditable }
+        if (editable != null) {
+            try {
+                val imeEnterId = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                if (editable.performAction(imeEnterId)) return true
+            } catch (_: Throwable) {
+                // Some OEMs throw here; ignore and fall back.
+            }
         }
-        // Try pressing the action key
-        return performGlobalAction(GLOBAL_ACTION_KEYCODE_HEADSETHOOK)
+
+        // Fall back to tapping common on-screen submit buttons.
+        val submitLabels = listOf(
+            "search", "go", "send", "ok", "done", "next", "enter", "submit"
+        )
+        val button = findNode(root) { node ->
+            val text = node.text?.toString()?.lowercase(Locale.getDefault()).orEmpty()
+            val desc = node.contentDescription?.toString()?.lowercase(Locale.getDefault()).orEmpty()
+            (node.isClickable || node.parent?.isClickable == true) &&
+                submitLabels.any { label -> text == label || desc == label || text.contains(label) || desc.contains(label) }
+        }
+        if (button != null) {
+            if (button.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+            return clickByBounds(button)
+        }
+
+        return false
     }
 
     fun pressBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)
@@ -312,6 +337,26 @@ class AgentAccessibilityService : AccessibilityService() {
         return findNode(root) { node ->
             node.viewIdResourceName?.contains(resourceId) == true
         }
+    }
+
+    fun clickByBounds(node: AccessibilityNodeInfo): Boolean {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        if (bounds.width() <= 0 || bounds.height() <= 0) return false
+
+        var clicked = node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (clicked) return true
+
+        var parent = node.parent
+        while (parent != null) {
+            clicked = parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            if (clicked) return true
+            parent = parent.parent
+        }
+
+        // Fallback to gesture tap.
+        tap((bounds.left + bounds.right) / 2, (bounds.top + bounds.bottom) / 2) { }
+        return true
     }
 
     fun findToggleNode(keyword: String): AccessibilityNodeInfo? {

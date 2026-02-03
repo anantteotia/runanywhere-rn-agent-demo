@@ -15,10 +15,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import org.json.JSONException
 import org.json.JSONObject
 import java.util.regex.Pattern
+import kotlin.coroutines.coroutineContext
 
 class AgentKernel(
     private val context: Context,
@@ -39,8 +41,14 @@ class AgentKernel(
         onLog = onLog
     )
 
+    data class Plan(
+        val steps: List<String>,
+        val successCriteria: String?
+    )
+
     private var activeModelId: String = AgentApplication.DEFAULT_MODEL
     private var isRunning = false
+    @Volatile private var stopRequested = false
 
     fun setModel(modelId: String) {
         activeModelId = modelId
@@ -62,10 +70,16 @@ class AgentKernel(
         }
 
         isRunning = true
+        stopRequested = false
         history.clear()
 
         try {
             emit(AgentEvent.Log("Starting agent..."))
+
+            if (!coroutineContext.isActive || stopRequested) {
+                emit(AgentEvent.Log("Agent cancelled"))
+                return@flow
+            }
 
             // Check if goal matches a shortcut pattern
             if (tryShortcut(goal)) {
@@ -78,15 +92,29 @@ class AgentKernel(
             ensureModelReady()
             emit(AgentEvent.Log("Model ready"))
 
+            val plan = try {
+                emit(AgentEvent.Log("Planning..."))
+                callPlanner(goal)
+            } catch (e: Exception) {
+                emit(AgentEvent.Log("Planning skipped: ${e.message}"))
+                null
+            }
+
             val startTime = System.currentTimeMillis()
             var step = 0
+            var planStepIndex = 0
 
             while (step < MAX_STEPS) {
+                if (!coroutineContext.isActive || stopRequested) {
+                    emit(AgentEvent.Log("Agent cancelled"))
+                    return@flow
+                }
+
                 step++
                 emit(AgentEvent.Log("Step $step/$MAX_STEPS"))
 
                 // Parse screen
-                val screen = screenParser.parse()
+                val screen = screenParser.parse(maxElements = if (history.hadRecentFailure()) 20 else 12)
                 if (screen.elementCount == 0) {
                     emit(AgentEvent.Log("No elements found, waiting..."))
                     delay(STEP_DELAY_MS)
@@ -112,14 +140,23 @@ class AgentKernel(
                     }
                     // Normal prompt with action result feedback
                     else -> {
-                        SystemPrompts.buildPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                        SystemPrompts.buildPrompt(
+                            goal = goal,
+                            screenState = screen.compactText,
+                            history = historyPrompt,
+                            lastActionResult = lastActionResult,
+                            plan = plan?.steps,
+                            successCriteria = plan?.successCriteria,
+                            activeStepIndex = planStepIndex
+                        )
                     }
                 }
 
                 val decisionJson = callLLM(prompt)
                 val decision = parseDecision(decisionJson)
 
-                emit(AgentEvent.Log("Action: ${decision.action}"))
+                val reason = decision.reason?.takeIf { it.isNotBlank() }?.let { " — $it" }.orEmpty()
+                emit(AgentEvent.Log("Action: ${decision.action}$reason"))
 
                 // Execute action
                 val result = actionExecutor.execute(decision, screen.indexToCoords)
@@ -134,6 +171,10 @@ class AgentKernel(
                     else -> null
                 }
                 history.record(decision.action, target, result.message, result.success)
+
+                if (result.success && decision.action != "wait") {
+                    planStepIndex = (planStepIndex + 1).coerceAtMost((plan?.steps?.size ?: 1) - 1)
+                }
 
                 // Check for completion
                 if (decision.action == "done") {
@@ -159,11 +200,12 @@ class AgentKernel(
             emit(AgentEvent.Error(e.message ?: "Unknown error"))
         } finally {
             isRunning = false
+            stopRequested = false
         }
     }
 
     fun stop() {
-        isRunning = false
+        stopRequested = true
     }
 
     private suspend fun ensureModelReady() {
@@ -185,11 +227,11 @@ class AgentKernel(
 
     private suspend fun callLLM(prompt: String): String {
         val options = LLMGenerationOptions(
-            maxTokens = 32,
+            maxTokens = 128,
             temperature = 0.0f,
             topP = 0.95f,
             streamingEnabled = false,
-            systemPrompt = null,
+            systemPrompt = SystemPrompts.AGENT_SYSTEM_PROMPT,
             structuredOutput = StructuredOutputConfig(
                 typeName = "Act",
                 includeSchemaInPrompt = true,
@@ -197,15 +239,56 @@ class AgentKernel(
             )
         )
 
-        return try {
-            val result = withContext(Dispatchers.Default) {
-                RunAnywhere.generate(prompt, options)
+        var lastError: Exception? = null
+        repeat(2) { attempt ->
+            try {
+                val result = withContext(Dispatchers.Default) {
+                    RunAnywhere.generate(prompt, options)
+                }
+                return result.text
+            } catch (e: Exception) {
+                lastError = e
+                Log.e(TAG, "LLM call failed (attempt ${attempt + 1}): ${e.message}", e)
+                delay(500)
             }
-            result.text
-        } catch (e: Exception) {
-            Log.e(TAG, "LLM call failed: ${e.message}", e)
-            "{\"a\":\"done\"}"
         }
+        throw lastError ?: RuntimeException("LLM call failed")
+    }
+
+    private suspend fun callPlanner(goal: String): Plan {
+        val options = LLMGenerationOptions(
+            maxTokens = 256,
+            temperature = 0.2f,
+            topP = 0.95f,
+            streamingEnabled = false,
+            systemPrompt = SystemPrompts.AGENT_SYSTEM_PROMPT,
+            structuredOutput = StructuredOutputConfig(
+                typeName = "Plan",
+                includeSchemaInPrompt = true,
+                jsonSchema = SystemPrompts.PLANNING_SCHEMA
+            )
+        )
+
+        val prompt = SystemPrompts.buildPlanningPrompt(goal)
+        val result = withContext(Dispatchers.Default) {
+            RunAnywhere.generate(prompt, options)
+        }
+
+        val cleaned = result.text.replace("```json", "").replace("```", "").trim()
+        val obj = JSONObject(cleaned)
+        val steps = obj.optJSONArray("steps")
+        val list = mutableListOf<String>()
+        if (steps != null) {
+            for (i in 0 until steps.length()) {
+                val s = steps.optString(i).trim()
+                if (s.isNotEmpty()) list.add(s)
+            }
+        }
+        if (list.isEmpty()) list.add("Complete the goal")
+        return Plan(
+            steps = list,
+            successCriteria = obj.optString("success_criteria").takeIf { it.isNotBlank() }
+        )
     }
 
     private fun parseDecision(text: String): Decision {
@@ -233,16 +316,66 @@ class AgentKernel(
     }
 
     private fun extractDecision(obj: JSONObject): Decision {
-        val action = obj.optString("a", "").ifEmpty { obj.optString("action", "") }
+        val rawAction = obj.optString("a", "").ifEmpty { obj.optString("action", "") }
+        val action = normalizeAction(rawAction, obj)
 
         return Decision(
             action = action.ifEmpty { "done" },
             elementIndex = obj.optInt("i", -1).takeIf { it >= 0 },
             text = obj.optString("t", "").ifEmpty { obj.optString("text") }?.takeIf { it.isNotEmpty() },
+            tapText = obj.optString("tt", "").ifEmpty { obj.optString("tap_text") }?.takeIf { it.isNotEmpty() },
+            resourceId = obj.optString("id", "").ifEmpty { obj.optString("resource_id") }?.takeIf { it.isNotEmpty() },
+            toggleKeyword = obj.optString("k", "").ifEmpty { obj.optString("keyword") }?.takeIf { it.isNotEmpty() },
             direction = obj.optString("d", "").ifEmpty { obj.optString("direction") }?.takeIf { it.isNotEmpty() },
+            timeoutMs = obj.optInt("ms", -1).takeIf { it > 0 },
+            maxSwipes = obj.optInt("n", -1).takeIf { it > 0 },
             url = obj.optString("u", "").ifEmpty { obj.optString("url") }?.takeIf { it.isNotEmpty() },
-            query = obj.optString("q", "").ifEmpty { obj.optString("query") }?.takeIf { it.isNotEmpty() }
+            query = obj.optString("q", "").ifEmpty { obj.optString("query") }?.takeIf { it.isNotEmpty() },
+            app = obj.optString("app", "").ifEmpty { obj.optString("p") }?.takeIf { it.isNotEmpty() },
+            reason = obj.optString("r", "").ifEmpty { obj.optString("reason") }?.takeIf { it.isNotEmpty() }
         )
+    }
+
+    private fun normalizeAction(rawAction: String, obj: JSONObject): String {
+        val a = rawAction.trim().lowercase()
+
+        // Common failure mode: model returns placeholder "ACTION".
+        if (a.isBlank() || a == "action") {
+            val hasQ = obj.optString("q", obj.optString("query", "")).isNotBlank()
+            val hasU = obj.optString("u", obj.optString("url", "")).isNotBlank()
+            val hasApp = obj.optString("app", obj.optString("p", "")).isNotBlank()
+            val hasT = obj.optString("t", obj.optString("text", "")).isNotBlank()
+            val hasTt = obj.optString("tt", obj.optString("tap_text", "")).isNotBlank()
+            val hasId = obj.optString("id", obj.optString("resource_id", "")).isNotBlank()
+            val hasI = obj.has("i") && obj.optInt("i", -1) >= 0
+            val hasD = obj.optString("d", obj.optString("direction", "")).isNotBlank()
+            val hasK = obj.optString("k", obj.optString("keyword", "")).isNotBlank()
+
+            return when {
+                hasQ -> "search"
+                hasU -> "url"
+                hasApp -> "open"
+                hasT -> "type"
+                hasTt -> "tap_text"
+                hasId -> "tap_id"
+                hasI -> "tap"
+                hasK -> "toggle"
+                hasD -> "swipe"
+                else -> "done"
+            }
+        }
+
+        // Accept a few aliases.
+        return when (a) {
+            "click" -> "tap"
+            "taptext" -> "tap_text"
+            "tap_text" -> "tap_text"
+            "tapid" -> "tap_id"
+            "tap_id" -> "tap_id"
+            "press_enter", "submit" -> "enter"
+            "scroll" -> "swipe"
+            else -> a
+        }
     }
 
     private fun heuristicDecision(text: String): Decision {
@@ -272,33 +405,100 @@ class AgentKernel(
                 val textMatch = Regex("\"([^\"]+)\"").find(text)
                 Decision("type", text = textMatch?.groupValues?.getOrNull(1) ?: "")
             }
+            lower.startsWith("open ") || lower.startsWith("launch ") -> {
+                val app = text.substringAfter(' ').trim()
+                Decision("open", app = app)
+            }
             else -> Decision("done")
         }
     }
 
-    private fun tryShortcut(goal: String): Boolean {
+    private suspend fun tryShortcut(goal: String): Boolean {
         val lower = goal.lowercase().trim()
+
+        // "play on youtube" shortcut - open YouTube and search via accessibility (no hardcoded coordinates)
+        if ((lower.contains("youtube") || lower.contains("yt")) &&
+            (lower.contains("play") || lower.contains("watch"))) {
+
+            // Extract search query if present
+            val searchQuery = extractSearchQuery(lower)
+
+            val opened = actionExecutor.openApp("YouTube")
+            if (opened) {
+                delay(2500) // Wait for YouTube to load
+
+                val service = AgentAccessibilityService.instance
+                if (service != null && searchQuery != null) {
+                    onLog("Searching YouTube for: $searchQuery")
+
+                    // Open search UI
+                    val searchNode = service.findNodeByText("Search")
+                        ?: service.findNodeByResourceId("search")
+                    if (searchNode != null) {
+                        service.clickByBounds(searchNode)
+                        delay(800)
+                    }
+
+                    // Type query
+                    val typed = service.typeText(searchQuery)
+                    delay(300)
+
+                    // Submit
+                    val submitted = service.submit()
+                    if (!typed || !submitted) {
+                        return false
+                    }
+
+                    delay(2500)
+
+                    // Tap first visible video-like element.
+                    val videoNode = service.findNodeByText("views")
+                        ?: service.findNodeByText("Watch")
+                        ?: service.findNodeByText("minutes")
+                    if (videoNode != null) {
+                        service.clickByBounds(videoNode)
+                        return true
+                    }
+                }
+
+                // If query is missing, let the LLM continue.
+                return searchQuery == null
+            }
+            return false
+        }
 
         // "open <app>" shortcut
         val openPatterns = listOf("open ", "launch ", "start ")
         for (prefix in openPatterns) {
             if (lower.startsWith(prefix)) {
                 var appName = goal.substring(prefix.length).trim()
-                // Stop at conjunctions
+                var hasMoreSteps = false
+
+                // Stop at conjunctions and check if there's more to do
                 val separators = listOf(" and ", " then ", ",")
                 for (sep in separators) {
                     val idx = appName.lowercase().indexOf(sep)
                     if (idx >= 0) {
                         appName = appName.substring(0, idx).trim()
+                        hasMoreSteps = true  // Goal continues after opening app
                         break
                     }
                 }
+
                 // Check if it's a settings shortcut
                 if (appName.lowercase().contains("setting")) {
-                    return actionExecutor.openSettings()
+                    val opened = actionExecutor.openSettings()
+                    // If there are more steps, let LLM continue
+                    return opened && !hasMoreSteps
                 }
+
                 if (appName.isNotEmpty()) {
-                    return actionExecutor.openApp(appName)
+                    val opened = actionExecutor.openApp(appName)
+                    if (opened && hasMoreSteps) {
+                        // App opened, but there's more to do - let LLM continue
+                        return false
+                    }
+                    return opened
                 }
             }
         }
@@ -312,5 +512,33 @@ class AgentKernel(
         }
 
         return false
+    }
+
+    private fun extractSearchQuery(goal: String): String? {
+        // Extract what to search for from goal
+        // "play drake on youtube" -> "drake"
+        // "watch lofi music on youtube" -> "lofi music"
+        // "play a video on youtube" -> null (just play any video)
+
+        val patterns = listOf(
+            "play (.+?) on (?:youtube|yt)",
+            "watch (.+?) on (?:youtube|yt)",
+            "search (?:for )?(.+?) on (?:youtube|yt)",
+            "(?:youtube|yt).+?(?:play|watch|search) (.+)",
+            "(?:play|watch) (.+?) (?:video|song|music)"
+        )
+
+        for (pattern in patterns) {
+            val match = Regex(pattern, RegexOption.IGNORE_CASE).find(goal)
+            if (match != null) {
+                val query = match.groupValues[1].trim()
+                // Filter out generic words
+                if (query.isNotEmpty() &&
+                    query !in listOf("a", "any", "some", "random", "a video", "video", "something")) {
+                    return query
+                }
+            }
+        }
+        return null
     }
 }

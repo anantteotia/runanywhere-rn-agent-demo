@@ -41,12 +41,27 @@ class ActionHistory {
     fun isRepetitive(action: String, target: String?): Boolean {
         if (history.isEmpty()) return false
 
-        // Check if the last 2 actions are the same
-        val recentActions = history.takeLast(2)
-        if (recentActions.size < 2) return false
+        // Detect simple repeats and short oscillations to avoid getting stuck.
+        val last = history.takeLast(6)
+        if (last.size < 3) return false
 
-        val allSame = recentActions.all { it.action == action && it.target == target }
-        return allSame
+        // AAA (same action+target 3 times)
+        val last3 = last.takeLast(3)
+        val same3 = last3.all { it.action == action && it.target == target }
+        if (same3) return true
+
+        // ABAB (two-step oscillation)
+        if (last.size >= 4) {
+            val last4 = last.takeLast(4)
+            val a = last4[0]
+            val b = last4[1]
+            val isOscillation =
+                last4[2].action == a.action && last4[2].target == a.target &&
+                    last4[3].action == b.action && last4[3].target == b.target
+            if (isOscillation) return true
+        }
+
+        return false
     }
 
     fun getLastAction(): ActionRecord? = history.lastOrNull()

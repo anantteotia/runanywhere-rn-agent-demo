@@ -2,11 +2,12 @@ package com.runanywhere.agent
 
 import android.app.Application
 import android.util.Log
-import com.runanywhere.sdk.public.AndroidPlatformContext
-import com.runanywhere.sdk.public.ModelRegistration
+import com.runanywhere.sdk.storage.AndroidPlatformContext
 import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.SDKEnvironment
-import com.runanywhere.sdk.public.extensions.LLM.LlamaCPP
+import com.runanywhere.sdk.public.extensions.registerModel
+import com.runanywhere.sdk.llm.llamacpp.LlamaCPP
+import com.runanywhere.sdk.core.types.InferenceFramework
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -18,12 +19,12 @@ class AgentApplication : Application() {
     companion object {
         private const val TAG = "AgentApplication"
 
-        // Available models
+        // Available models (using public HuggingFace URLs)
         val AVAILABLE_MODELS = listOf(
             ModelInfo(
                 id = "smollm2-360m-instruct-q8_0",
                 name = "SmolLM2 360M (Fast)",
-                url = "https://huggingface.co/runanywhere/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf",
+                url = "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf",
                 sizeBytes = 400_000_000L
             ),
             ModelInfo(
@@ -33,10 +34,10 @@ class AgentApplication : Application() {
                 sizeBytes = 1_200_000_000L
             ),
             ModelInfo(
-                id = "lfm2.5-1.2b-instruct-q4_k_m",
-                name = "LFM2.5 1.2B (Edge)",
-                url = "https://huggingface.co/runanywhere/LFM2.5-1.2B-Instruct-GGUF/resolve/main/lfm2.5-1.2b-instruct-q4_k_m.gguf",
-                sizeBytes = 800_000_000L
+                id = "smollm2-1.7b-instruct-q4_k_m",
+                name = "SmolLM2 1.7B (Edge)",
+                url = "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf",
+                sizeBytes = 1_000_000_000L
             )
         )
 
@@ -57,7 +58,7 @@ class AgentApplication : Application() {
 
                 Log.i(TAG, "Initializing RunAnywhere SDK...")
                 AndroidPlatformContext.initialize(applicationContext)
-                RunAnywhere.initialize(SDKEnvironment.DEVELOPMENT)
+                RunAnywhere.initialize(environment = SDKEnvironment.DEVELOPMENT)
                 RunAnywhere.completeServicesInitialization()
 
                 // Register LlamaCPP backend
@@ -66,11 +67,11 @@ class AgentApplication : Application() {
                 // Register available models
                 AVAILABLE_MODELS.forEach { model ->
                     RunAnywhere.registerModel(
-                        ModelRegistration(
-                            id = model.id,
-                            url = model.url,
-                            requiredMemoryBytes = model.sizeBytes
-                        )
+                        id = model.id,
+                        name = model.name,
+                        url = model.url,
+                        framework = InferenceFramework.LLAMA_CPP,
+                        memoryRequirement = model.sizeBytes
                     )
                     Log.i(TAG, "Registered model: ${model.id}")
                 }

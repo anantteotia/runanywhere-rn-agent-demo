@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.runanywhere.agent.accessibility.AgentAccessibilityService
 import com.runanywhere.agent.kernel.AgentKernel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +36,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         context = application,
         onLog = { log -> addLog(log) }
     )
+
+    private var agentJob: Job? = null
 
     init {
         checkServiceStatus()
@@ -80,7 +83,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             logs = listOf("Starting: $goal")
         )
 
-        viewModelScope.launch {
+        agentJob?.cancel()
+        agentJob = viewModelScope.launch {
             agentKernel.run(goal).collect { event ->
                 when (event) {
                     is AgentKernel.AgentEvent.Log -> addLog(event.message)
@@ -100,6 +104,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopAgent() {
         agentKernel.stop()
+        agentJob?.cancel()
+        agentJob = null
         addLog("Agent stopped")
         _uiState.value = _uiState.value.copy(status = Status.IDLE)
     }

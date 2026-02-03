@@ -20,3 +20,10 @@ local.properties
 
 # Local
 *.log
+
+# JDK
+.jdk/
+
+# Build artifacts
+.cxx/
+.tmp-sdk/
