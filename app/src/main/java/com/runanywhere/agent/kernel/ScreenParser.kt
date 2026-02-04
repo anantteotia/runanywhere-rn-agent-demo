@@ -10,7 +10,7 @@ class ScreenParser(private val accessibilityService: () -> AgentAccessibilitySer
         val elementCount: Int
     )
 
-    fun parse(maxElements: Int = 12, maxTextLength: Int = 20): ParsedScreen {
+    fun parse(maxElements: Int = 30, maxTextLength: Int = 50): ParsedScreen {
         val service = accessibilityService() ?: return ParsedScreen("(no screen access)", emptyMap(), 0)
         val state = service.getScreenState(maxElements, maxTextLength)
         return ParsedScreen(
@@ -20,7 +20,7 @@ class ScreenParser(private val accessibilityService: () -> AgentAccessibilitySer
         )
     }
 
-    fun getElementLabel(index: Int, maxElements: Int = 12): String? {
+    fun getElementLabel(index: Int, maxElements: Int = 30): String? {
         val service = accessibilityService() ?: return null
         val state = service.getScreenState(maxElements, 50)
         return state.elements.getOrNull(index)?.label

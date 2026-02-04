@@ -20,3 +20,7 @@ local.properties
 
 # Local
 *.log
+.jdk/
+.tmp-sdk/
+android/
+node_modules/

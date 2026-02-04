@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -18,7 +19,18 @@ android {
             abiFilters += "arm64-v8a"
         }
 
-        val gptKeyRaw = (project.findProperty("GPT52_API_KEY") as String? ?: "")
+        // Read API key from gradle.properties, falling back to local.properties
+        val gptKeyFromGradle = (project.findProperty("GPT52_API_KEY") as String? ?: "").trim()
+        val gptKeyRaw = if (gptKeyFromGradle.isNotEmpty()) {
+            gptKeyFromGradle
+        } else {
+            val localFile = rootProject.file("local.properties")
+            if (localFile.exists()) {
+                localFile.readLines()
+                    .firstOrNull { it.startsWith("GPT52_API_KEY=") }
+                    ?.substringAfter("=")?.trim() ?: ""
+            } else ""
+        }
         val gptKey = gptKeyRaw.replace("\"", "\\\"")
         buildConfigField("String", "GPT52_API_KEY", "\"$gptKey\"")
     }
@@ -44,11 +56,9 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.5"
-    }
 
     packaging {
         resources {
@@ -58,9 +68,9 @@ android {
 }
 
 dependencies {
-    // RunAnywhere SDK (on-device LLM)
-    implementation("io.github.sanchitmonga22:runanywhere-sdk-android:0.1.5-SNAPSHOT")
-    implementation("io.github.sanchitmonga22:runanywhere-llamacpp-android:0.1.5-SNAPSHOT")
+    // RunAnywhere SDK (on-device LLM) - local AARs
+    implementation(files("../libs/RunAnywhereKotlinSDK-release.aar"))
+    implementation(files("../libs/runanywhere-core-llamacpp-release.aar"))
 
     // Android Core
     implementation("androidx.core:core-ktx:1.12.0")

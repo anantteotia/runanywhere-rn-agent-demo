@@ -95,11 +95,12 @@ class AgentAccessibilityService : AccessibilityService() {
             val caps = mutableListOf<String>()
             if (elem.isClickable) caps.add("tap")
             if (elem.isEditable) caps.add("edit")
-            if (elem.isCheckable) caps.add(if (elem.isChecked) "on" else "off")
+            if (elem.isCheckable) caps.add(if (elem.isChecked) "checked" else "unchecked")
 
             val capsStr = if (caps.isNotEmpty()) " [${caps.joinToString(",")}]" else ""
             val displayLabel = elem.label.ifEmpty { elem.className.split(".").lastOrNull() ?: "element" }
-            lines.add("$idx:$displayLabel$capsStr")
+            val typeStr = elem.className.split(".").lastOrNull() ?: ""
+            lines.add("$idx: $displayLabel ($typeStr) $capsStr".trim())
         }
 
         return ScreenState(lines.joinToString("\n"), elements, indexToCoords)

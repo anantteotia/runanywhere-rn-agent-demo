@@ -20,21 +20,21 @@ class ActionHistory {
     fun formatForPrompt(): String {
         if (history.isEmpty()) return ""
 
-        val lines = history.takeLast(5).map { record ->
-            val targetStr = record.target?.let { " '$it'" } ?: ""
-            val resultStr = record.result?.let { " → $it" } ?: ""
-            val status = if (record.success) "✓" else "✗"
-            "$status Step ${record.step}: ${record.action}$targetStr$resultStr"
+        val lines = history.takeLast(8).map { record ->
+            val targetStr = record.target?.let { " \"$it\"" } ?: ""
+            val resultStr = record.result?.let { " -> $it" } ?: ""
+            val status = if (record.success) "OK" else "FAILED"
+            "Step ${record.step}: ${record.action}$targetStr $status$resultStr"
         }
 
-        return "\nHISTORY:\n${lines.joinToString("\n")}"
+        return "\n\nPREVIOUS_ACTIONS:\n${lines.joinToString("\n")}"
     }
 
     fun getLastActionResult(): String? {
         return history.lastOrNull()?.let { record ->
-            val targetStr = record.target?.let { "'$it'" } ?: ""
+            val targetStr = record.target?.let { "\"$it\"" } ?: ""
             val resultStr = record.result ?: ""
-            "${record.action} $targetStr → $resultStr"
+            "${record.action} $targetStr -> $resultStr"
         }
     }
 

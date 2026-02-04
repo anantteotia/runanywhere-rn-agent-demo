@@ -47,9 +47,9 @@ class GPTClient(
 
     suspend fun generateAction(prompt: String): String? {
         return request(
-            systemPrompt = "You are a precise Android agent. Respond ONLY with JSON following this schema: ${SystemPrompts.DECISION_SCHEMA}",
+            systemPrompt = SystemPrompts.SYSTEM_PROMPT,
             userPrompt = prompt,
-            maxTokens = 128
+            maxTokens = 256
         )
     }
 
@@ -57,9 +57,10 @@ class GPTClient(
         val apiKey = apiKeyProvider()?.takeIf { it.isNotBlank() } ?: return null
 
         val payload = JSONObject().apply {
-            put("model", "gpt-5.2")
+            put("model", "gpt-4o")
             put("temperature", 0)
             put("max_tokens", maxTokens)
+            put("response_format", JSONObject().put("type", "json_object"))
             put("messages", JSONArray().apply {
                 put(JSONObject().put("role", "system").put("content", systemPrompt))
                 put(JSONObject().put("role", "user").put("content", userPrompt))
@@ -79,14 +80,14 @@ class GPTClient(
             if (!response.isSuccessful) {
                 val err = body ?: response.message
                 Log.e(TAG, "GPT call failed: ${response.code} $err")
-                onLog("GPT-5.2 error ${response.code}")
+                onLog("GPT-4o error ${response.code}")
                 null
             } else {
                 body?.let { extractContent(it) }
             }
         } catch (e: Exception) {
             Log.e(TAG, "GPT request error: ${e.message}", e)
-            onLog("GPT-5.2 request failed: ${e.message}")
+            onLog("GPT-4o request failed: ${e.message}")
             null
         }
     }
