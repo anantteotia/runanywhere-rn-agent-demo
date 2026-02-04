@@ -17,6 +17,10 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+
+        val gptKeyRaw = (project.findProperty("GPT52_API_KEY") as String? ?: "")
+        val gptKey = gptKeyRaw.replace("\"", "\\\"")
+        buildConfigField("String", "GPT52_API_KEY", "\"$gptKey\"")
     }
 
     buildTypes {
@@ -74,6 +78,9 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // Networking
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")

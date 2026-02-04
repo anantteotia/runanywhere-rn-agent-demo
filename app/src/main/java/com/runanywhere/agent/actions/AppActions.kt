@@ -3,6 +3,7 @@ package com.runanywhere.agent.actions
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.AlarmClock
 import android.util.Log
 
 object AppActions {
@@ -19,6 +20,7 @@ object AppActions {
         const val MAPS = "com.google.android.apps.maps"
         const val SPOTIFY = "com.spotify.music"
         const val CAMERA = "com.android.camera"
+        const val CLOCK = "com.google.android.deskclock"
     }
 
     fun openYouTubeSearch(context: Context, query: String): Boolean {
@@ -181,6 +183,39 @@ object AppActions {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open camera: ${e.message}")
             openApp(context, Packages.CAMERA)
+        }
+    }
+
+    fun openClock(context: Context): Boolean {
+        if (openApp(context, Packages.CLOCK)) return true
+        val knownPackages = listOf("com.android.deskclock", "com.sec.android.app.clockpackage")
+        if (knownPackages.any { openApp(context, it) }) return true
+
+        return try {
+            val intent = Intent(AlarmClock.ACTION_SHOW_TIMERS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open clock: ${e.message}")
+            false
+        }
+    }
+
+    fun setTimer(context: Context, totalSeconds: Int, label: String? = null, skipUi: Boolean = false): Boolean {
+        return try {
+            val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
+                putExtra(AlarmClock.EXTRA_LENGTH, totalSeconds)
+                putExtra(AlarmClock.EXTRA_SKIP_UI, skipUi)
+                label?.let { putExtra(AlarmClock.EXTRA_MESSAGE, it.take(30)) }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to set timer: ${e.message}")
+            openClock(context)
         }
     }
 
