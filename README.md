@@ -102,15 +102,4 @@ decides the next action with the RunAnywhere LLM, and executes it on the device.
 
 ## Demo Screenshots
 
-Idle  
-![Idle](docs/screenshots/Idle.jpeg)
-
-Running  
-![Running](docs/screenshots/Running.jpeg)
-
-Done  
-![Done](docs/screenshots/Done.jpeg)
-
----
-
 Built for the RunAnywhere Agent demo.
