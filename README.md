@@ -100,6 +100,4 @@ decides the next action with the RunAnywhere LLM, and executes it on the device.
 > Note: the app launcher uses the device’s visible app labels. If a target app isn’t found,
 > the agent shows example labels it can open. Use one of those labels exactly.
 
-## Demo Screenshots
-
 Built for the RunAnywhere Agent demo.
