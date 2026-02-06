@@ -1,19 +1,37 @@
 package com.runanywhere.agent
 
 import android.app.Application
-import android.content.Context
 import android.content.Intent
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.provider.Settings
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.runanywhere.agent.accessibility.AgentAccessibilityService
 import com.runanywhere.agent.kernel.AgentKernel
+import com.runanywhere.sdk.public.RunAnywhere
+import com.runanywhere.sdk.public.extensions.downloadModel
+import com.runanywhere.sdk.public.extensions.loadSTTModel
+import com.runanywhere.sdk.public.extensions.transcribe
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 
 class AgentViewModel(application: Application) : AndroidViewModel(application) {
+
+    companion object {
+        private const val TAG = "AgentViewModel"
+        private const val SAMPLE_RATE = 16000
+        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
+        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+    }
 
     enum class Status {
         IDLE, RUNNING, DONE, ERROR
@@ -25,7 +43,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         val logs: List<String> = emptyList(),
         val isServiceEnabled: Boolean = false,
         val selectedModelIndex: Int = 1, // Default to Qwen (best)
-        val availableModels: List<ModelInfo> = AgentApplication.AVAILABLE_MODELS
+        val availableModels: List<ModelInfo> = AgentApplication.AVAILABLE_MODELS,
+        val isRecording: Boolean = false,
+        val isTranscribing: Boolean = false,
+        val isSTTModelLoaded: Boolean = false,
+        val isSTTModelLoading: Boolean = false,
+        val sttDownloadProgress: Float = 0f
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -35,6 +58,12 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         context = application,
         onLog = { log -> addLog(log) }
     )
+
+    // Audio recording state
+    private var audioRecord: AudioRecord? = null
+    @Volatile
+    private var isCapturing = false
+    private val audioData = ByteArrayOutputStream()
 
     init {
         checkServiceStatus()
@@ -106,6 +135,162 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearLogs() {
         _uiState.value = _uiState.value.copy(logs = emptyList())
+    }
+
+    // ========== STT Methods ==========
+
+    fun loadSTTModelIfNeeded() {
+        if (_uiState.value.isSTTModelLoaded || _uiState.value.isSTTModelLoading) return
+
+        _uiState.value = _uiState.value.copy(isSTTModelLoading = true, sttDownloadProgress = 0f)
+
+        viewModelScope.launch {
+            try {
+                // Download model if needed
+                var downloadFailed = false
+                RunAnywhere.downloadModel(AgentApplication.STT_MODEL_ID)
+                    .catch { e ->
+                        Log.e(TAG, "STT download failed: ${e.message}")
+                        addLog("STT download failed: ${e.message}")
+                        downloadFailed = true
+                    }
+                    .collect { progress ->
+                        _uiState.value = _uiState.value.copy(sttDownloadProgress = progress.progress)
+                    }
+
+                if (downloadFailed) {
+                    _uiState.value = _uiState.value.copy(isSTTModelLoading = false)
+                    return@launch
+                }
+
+                // Load model
+                RunAnywhere.loadSTTModel(AgentApplication.STT_MODEL_ID)
+                _uiState.value = _uiState.value.copy(
+                    isSTTModelLoaded = true,
+                    isSTTModelLoading = false
+                )
+                Log.i(TAG, "STT model loaded")
+            } catch (e: Exception) {
+                Log.e(TAG, "STT model load failed: ${e.message}", e)
+                addLog("STT model load failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(isSTTModelLoading = false)
+            }
+        }
+    }
+
+    @Suppress("MissingPermission")
+    fun startRecording() {
+        if (_uiState.value.isRecording) return
+
+        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
+            addLog("Audio recording not supported")
+            return
+        }
+
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                SAMPLE_RATE,
+                CHANNEL_CONFIG,
+                AUDIO_FORMAT,
+                bufferSize * 2
+            )
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                audioRecord?.release()
+                audioRecord = null
+                addLog("Failed to initialize audio recorder")
+                return
+            }
+
+            audioData.reset()
+            audioRecord?.startRecording()
+            isCapturing = true
+            _uiState.value = _uiState.value.copy(isRecording = true)
+
+            // Capture audio in background thread
+            viewModelScope.launch(Dispatchers.IO) {
+                val buffer = ByteArray(bufferSize)
+                while (isCapturing) {
+                    val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
+                    if (read > 0) {
+                        synchronized(audioData) {
+                            audioData.write(buffer, 0, read)
+                        }
+                    }
+                }
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Microphone permission denied: ${e.message}")
+            addLog("Microphone permission required")
+            audioRecord?.release()
+            audioRecord = null
+        }
+    }
+
+    fun stopRecordingAndTranscribe() {
+        if (!_uiState.value.isRecording) return
+
+        // Stop capturing
+        isCapturing = false
+        audioRecord?.let { record ->
+            if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                record.stop()
+            }
+            record.release()
+        }
+        audioRecord = null
+
+        val capturedAudio: ByteArray
+        synchronized(audioData) {
+            capturedAudio = audioData.toByteArray()
+        }
+
+        _uiState.value = _uiState.value.copy(isRecording = false, isTranscribing = true)
+
+        if (capturedAudio.isEmpty()) {
+            addLog("No audio recorded")
+            _uiState.value = _uiState.value.copy(isTranscribing = false)
+            return
+        }
+
+        viewModelScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    RunAnywhere.transcribe(capturedAudio)
+                }
+
+                if (result.isNotBlank()) {
+                    _uiState.value = _uiState.value.copy(
+                        goal = result.trim(),
+                        isTranscribing = false
+                    )
+                } else {
+                    addLog("No speech detected")
+                    _uiState.value = _uiState.value.copy(isTranscribing = false)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Transcription failed: ${e.message}", e)
+                addLog("Transcription failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(isTranscribing = false)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // Clean up audio resources
+        isCapturing = false
+        audioRecord?.let { record ->
+            try {
+                if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    record.stop()
+                }
+                record.release()
+            } catch (_: Exception) {}
+        }
+        audioRecord = null
     }
 
     private fun addLog(message: String) {

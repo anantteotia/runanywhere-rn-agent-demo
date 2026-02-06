@@ -36,6 +36,8 @@ IMPORTANT RULES:
 - Direction values: "up", "down", "left", "right".
 - When the goal is achieved, output {"action": "done", "reason": "explanation"}.
 - ALWAYS include a "reason" field explaining your decision.
+- SEARCH RESULTS: If you already typed a search query and the screen now shows results (video titles, links, items), do NOT type or search again. Instead, tap the first relevant result.
+- NEVER re-type text you already typed. Check PREVIOUS_ACTIONS carefully.
 - TIMER NUMPAD: The Android Clock timer numpad fills digits from RIGHT to LEFT (seconds, then minutes, then hours). To set 2 minutes, tap digits 2, 0, 0 (which displays as 02m 00s). To set 1 hour 30 minutes, tap 1, 3, 0, 0, 0. Just tapping "2" alone sets only 2 SECONDS, not 2 minutes.
 
 Example - Tapping element 5:

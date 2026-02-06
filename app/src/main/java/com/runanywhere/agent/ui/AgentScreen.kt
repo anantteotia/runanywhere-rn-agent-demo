@@ -1,21 +1,28 @@
 package com.runanywhere.agent.ui
 
-import androidx.compose.foundation.background
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.runanywhere.agent.AgentViewModel
@@ -27,6 +34,24 @@ import com.runanywhere.agent.ui.components.StatusBadge
 fun AgentScreen(viewModel: AgentViewModel) {
     val uiState by viewModel.uiState.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
+
+    var hasMicPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasMicPermission = isGranted
+        if (isGranted) {
+            // Permission just granted — load STT model and start recording
+            viewModel.loadSTTModelIfNeeded()
+        }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -89,17 +114,60 @@ fun AgentScreen(viewModel: AgentViewModel) {
                 enabled = uiState.status != AgentViewModel.Status.RUNNING
             )
 
-            // Goal Input
+            // Goal Input with Mic Button
             OutlinedTextField(
                 value = uiState.goal,
                 onValueChange = viewModel::setGoal,
                 label = { Text("Enter your goal") },
                 placeholder = { Text("e.g., 'Play lofi music on YouTube'") },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = uiState.status != AgentViewModel.Status.RUNNING,
+                enabled = uiState.status != AgentViewModel.Status.RUNNING &&
+                        !uiState.isRecording && !uiState.isTranscribing,
                 minLines = 2,
-                maxLines = 4
+                maxLines = 4,
+                trailingIcon = {
+                    MicButton(
+                        isRecording = uiState.isRecording,
+                        isTranscribing = uiState.isTranscribing,
+                        isSTTModelLoading = uiState.isSTTModelLoading,
+                        isAgentRunning = uiState.status == AgentViewModel.Status.RUNNING,
+                        onClick = {
+                            if (uiState.isRecording) {
+                                viewModel.stopRecordingAndTranscribe()
+                            } else {
+                                if (!hasMicPermission) {
+                                    permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                    return@MicButton
+                                }
+                                if (!uiState.isSTTModelLoaded && !uiState.isSTTModelLoading) {
+                                    viewModel.loadSTTModelIfNeeded()
+                                }
+                                if (uiState.isSTTModelLoaded) {
+                                    viewModel.startRecording()
+                                }
+                            }
+                        }
+                    )
+                }
             )
+
+            // STT model loading progress
+            if (uiState.isSTTModelLoading) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    LinearProgressIndicator(
+                        progress = uiState.sttDownloadProgress,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = "${(uiState.sttDownloadProgress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            }
 
             // Control Buttons
             Row(
@@ -150,6 +218,42 @@ fun AgentScreen(viewModel: AgentViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MicButton(
+    isRecording: Boolean,
+    isTranscribing: Boolean,
+    isSTTModelLoading: Boolean,
+    isAgentRunning: Boolean,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = !isTranscribing && !isSTTModelLoading && !isAgentRunning
+    ) {
+        when {
+            isTranscribing -> CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp
+            )
+            isSTTModelLoading -> CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+            isRecording -> Icon(
+                imageVector = Icons.Rounded.Stop,
+                contentDescription = "Stop recording",
+                tint = MaterialTheme.colorScheme.error
+            )
+            else -> Icon(
+                imageVector = Icons.Rounded.Mic,
+                contentDescription = "Start recording",
+                tint = MaterialTheme.colorScheme.primary
             )
         }
     }

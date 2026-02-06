@@ -64,13 +64,17 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            pickFirsts += "**/*.so"
+        }
     }
 }
 
 dependencies {
-    // RunAnywhere SDK (on-device LLM) - local AARs
+    // RunAnywhere SDK (on-device LLM + STT) - local AARs
     implementation(files("../libs/RunAnywhereKotlinSDK-release.aar"))
     implementation(files("../libs/runanywhere-core-llamacpp-release.aar"))
+    implementation(files("../libs/runanywhere-core-onnx-release.aar"))
 
     // Android Core
     implementation("androidx.core:core-ktx:1.12.0")
@@ -83,6 +87,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
 
     // Coroutines

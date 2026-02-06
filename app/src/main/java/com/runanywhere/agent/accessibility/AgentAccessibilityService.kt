@@ -232,13 +232,23 @@ class AgentAccessibilityService : AccessibilityService() {
 
     fun pressEnter(): Boolean {
         val root = rootInActiveWindow ?: return false
-        val focused = findNode(root) { it.isFocused }
+        val focused = findNode(root) { it.isFocused || it.isEditable }
+
         if (focused != null) {
-            val clicked = focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            if (clicked) return true
+            // API 30+: use ACTION_IME_ENTER which triggers the keyboard's search/done/enter action
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (focused.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)) {
+                    return true
+                }
+            }
+            // Fallback: click the focused node (may submit on some fields)
+            if (focused.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                return true
+            }
         }
-        // Try pressing the action key
-        return performGlobalAction(GLOBAL_ACTION_KEYCODE_HEADSETHOOK)
+
+        // Last resort: try global back (unreliable for Enter)
+        return false
     }
 
     fun pressBack(): Boolean = performGlobalAction(GLOBAL_ACTION_BACK)

@@ -41,12 +41,29 @@ class ActionHistory {
     fun isRepetitive(action: String, target: String?): Boolean {
         if (history.isEmpty()) return false
 
-        // Check if the last 2 actions are the same
+        // Check if the last 2 actions are the same (exact consecutive repeat)
         val recentActions = history.takeLast(2)
-        if (recentActions.size < 2) return false
+        if (recentActions.size >= 2) {
+            val allSame = recentActions.all { it.action == action && it.target == target }
+            if (allSame) return true
+        }
 
-        val allSame = recentActions.all { it.action == action && it.target == target }
-        return allSame
+        // Check for alternating patterns in last 4 actions (A→B→A→B)
+        val last4 = history.takeLast(4)
+        if (last4.size >= 4) {
+            val a = last4[0]; val b = last4[1]; val c = last4[2]; val d = last4[3]
+            if (a.action == c.action && a.target == c.target &&
+                b.action == d.action && b.target == d.target) {
+                return true
+            }
+        }
+
+        // Check if the same action+target appears 3+ times in last 6 actions
+        val last6 = history.takeLast(6)
+        val sameCount = last6.count { it.action == action && it.target == target }
+        if (sameCount >= 3) return true
+
+        return false
     }
 
     fun getLastAction(): ActionRecord? = history.lastOrNull()

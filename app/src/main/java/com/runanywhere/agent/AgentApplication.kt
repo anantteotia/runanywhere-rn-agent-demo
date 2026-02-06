@@ -7,7 +7,9 @@ import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.SDKEnvironment
 import com.runanywhere.sdk.public.extensions.registerModel
 import com.runanywhere.sdk.llm.llamacpp.LlamaCPP
+import com.runanywhere.sdk.core.onnx.ONNX
 import com.runanywhere.sdk.core.types.InferenceFramework
+import com.runanywhere.sdk.public.extensions.Models.ModelCategory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,6 +44,7 @@ class AgentApplication : Application() {
         )
 
         const val DEFAULT_MODEL = "qwen2.5-1.5b-instruct-q4_k_m"
+        const val STT_MODEL_ID = "sherpa-onnx-whisper-tiny.en"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -61,10 +64,21 @@ class AgentApplication : Application() {
                 RunAnywhere.initialize(environment = SDKEnvironment.DEVELOPMENT)
                 RunAnywhere.completeServicesInitialization()
 
-                // Register LlamaCPP backend
+                // Register backends
                 LlamaCPP.register(priority = 100)
+                ONNX.register(priority = 90)
 
-                // Register available models
+                // Register STT model (Whisper Tiny English, ~75MB)
+                RunAnywhere.registerModel(
+                    id = STT_MODEL_ID,
+                    name = "Whisper Tiny (English)",
+                    url = "https://github.com/RunanywhereAI/sherpa-onnx/releases/download/runanywhere-models-v1/sherpa-onnx-whisper-tiny.en.tar.gz",
+                    framework = InferenceFramework.ONNX,
+                    modality = ModelCategory.SPEECH_RECOGNITION
+                )
+                Log.i(TAG, "Registered STT model: $STT_MODEL_ID")
+
+                // Register available LLM models
                 AVAILABLE_MODELS.forEach { model ->
                     RunAnywhere.registerModel(
                         id = model.id,
