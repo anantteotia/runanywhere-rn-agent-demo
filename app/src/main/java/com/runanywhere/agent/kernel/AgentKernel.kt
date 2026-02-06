@@ -8,12 +8,15 @@ import com.runanywhere.agent.accessibility.AgentAccessibilityService
 import com.runanywhere.agent.actions.AppActions
 import com.runanywhere.agent.toolcalling.BuiltInTools
 import com.runanywhere.agent.toolcalling.LLMResponse
+import com.runanywhere.agent.toolcalling.ToolCall
 import com.runanywhere.agent.toolcalling.ToolCallParser
 import com.runanywhere.agent.toolcalling.ToolDefinition
 import com.runanywhere.agent.toolcalling.ToolHandler
 import com.runanywhere.agent.toolcalling.ToolPromptFormatter
 import com.runanywhere.agent.toolcalling.ToolRegistry
 import com.runanywhere.agent.toolcalling.ToolResult
+import com.runanywhere.agent.toolcalling.UIActionContext
+import com.runanywhere.agent.toolcalling.UIActionTools
 import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.extensions.LLM.LLMGenerationOptions
 import com.runanywhere.sdk.public.extensions.LLM.StructuredOutputConfig
@@ -55,8 +58,11 @@ class AgentKernel(
         onLog = onLog
     )
 
+    private val uiActionContext = UIActionContext()
+
     private val toolRegistry = ToolRegistry().also { registry ->
         BuiltInTools.registerAll(registry, context)
+        UIActionTools.registerAll(registry, uiActionContext, actionExecutor)
     }
 
     private var activeModelId: String = AgentApplication.DEFAULT_MODEL
@@ -148,6 +154,9 @@ class AgentKernel(
                     continue
                 }
 
+                // Update UI action context with fresh coordinates
+                uiActionContext.indexToCoords = screen.indexToCoords
+
                 // Capture screenshot for VLM
                 val screenshotBase64 = try {
                     AgentAccessibilityService.instance?.captureScreenshotBase64()
@@ -172,32 +181,33 @@ class AgentKernel(
                 val hadFailure = history.hadRecentFailure()
 
                 // Choose appropriate prompt based on context
+                val useToolCalling = gptClient.isConfigured()
                 val prompt = if (useVision) {
                     when {
                         loopDetected -> {
                             emit(AgentEvent.Log("Loop detected, adding recovery prompt"))
-                            SystemPrompts.buildVisionLoopRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                            SystemPrompts.buildVisionLoopRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult, useToolCalling)
                         }
                         hadFailure -> {
                             emit(AgentEvent.Log("Recent failure, adding recovery hints"))
-                            SystemPrompts.buildVisionFailureRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                            SystemPrompts.buildVisionFailureRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult, useToolCalling)
                         }
                         else -> {
-                            SystemPrompts.buildVisionPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                            SystemPrompts.buildVisionPrompt(goal, screen.compactText, historyPrompt, lastActionResult, useToolCalling)
                         }
                     }
                 } else {
                     when {
                         loopDetected -> {
                             emit(AgentEvent.Log("Loop detected, adding recovery prompt"))
-                            SystemPrompts.buildLoopRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                            SystemPrompts.buildLoopRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult, useToolCalling)
                         }
                         hadFailure -> {
                             emit(AgentEvent.Log("Recent failure, adding recovery hints"))
-                            SystemPrompts.buildFailureRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                            SystemPrompts.buildFailureRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult, useToolCalling)
                         }
                         else -> {
-                            SystemPrompts.buildPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                            SystemPrompts.buildPrompt(goal, screen.compactText, historyPrompt, lastActionResult, useToolCalling)
                         }
                     }
                 }
@@ -226,11 +236,51 @@ class AgentKernel(
                 // Resolve any tool calls (sub-loop)
                 val finalResponse = resolveToolCalls(response, prompt) { event -> emit(event) }
 
+                // Handle UI action tool calls from GPT-4o function calling
+                if (finalResponse is LLMResponse.UIActionToolCall) {
+                    val call = finalResponse.call
+                    val actionName = mapToolNameToAction(call.toolName)
+                    val target = extractTargetFromToolCall(call)
+
+                    emit(AgentEvent.Log("Action (tool): $actionName"))
+
+                    // Speak key actions
+                    when (actionName) {
+                        "open" -> (call.arguments["app_name"] as? String)?.let {
+                            emit(AgentEvent.Speak("Opening $it"))
+                        }
+                        "type" -> (call.arguments["text"] as? String)?.let {
+                            val preview = if (it.length > 30) it.take(30) + "..." else it
+                            emit(AgentEvent.Speak("Typing $preview"))
+                        }
+                    }
+
+                    // Execute via tool registry (which delegates to ActionExecutor)
+                    val result = toolRegistry.execute(call)
+                    emit(AgentEvent.Step(step, actionName, result.result))
+                    history.record(actionName, target, result.result, !result.isError)
+
+                    if (call.toolName == "ui_done") {
+                        emit(AgentEvent.Speak("Task complete."))
+                        emit(AgentEvent.Done("Goal achieved"))
+                        return@flow
+                    }
+
+                    // Check timeout
+                    if (System.currentTimeMillis() - startTime > MAX_DURATION_MS) {
+                        emit(AgentEvent.Done("Max duration reached"))
+                        return@flow
+                    }
+
+                    delay(STEP_DELAY_MS)
+                    continue
+                }
+
+                // Legacy path: handle JSON-based UI actions (local model fallback)
                 val decision = when (finalResponse) {
                     is LLMResponse.UIAction -> parseDecision(finalResponse.json)
                     is LLMResponse.TextAnswer -> {
                         emit(AgentEvent.Log("LLM answer: ${finalResponse.text}"))
-                        // Try to extract a decision from the text answer
                         tryExtractDecisionFromText(finalResponse.text) ?: Decision("wait")
                     }
                     is LLMResponse.Error -> {
@@ -239,6 +289,10 @@ class AgentKernel(
                     }
                     is LLMResponse.ToolCalls -> {
                         emit(AgentEvent.Log("Unresolved tool calls after max iterations"))
+                        Decision("wait")
+                    }
+                    is LLMResponse.UIActionToolCall -> {
+                        // Should not reach here, handled above
                         Decision("wait")
                     }
                 }
@@ -320,7 +374,8 @@ class AgentKernel(
     }
 
     private suspend fun callLocalLLMWithTools(prompt: String): LLMResponse {
-        val tools = toolRegistry.getDefinitions()
+        // Filter out ui_* tools for local models — too many tools overwhelms small models
+        val tools = toolRegistry.getDefinitions().filter { !it.name.startsWith("ui_") }
         val hasTools = tools.isNotEmpty()
 
         val options = if (hasTools) {
@@ -398,6 +453,14 @@ class AgentKernel(
         while (current is LLMResponse.ToolCalls && iterations < MAX_TOOL_ITERATIONS) {
             iterations++
             val toolCalls = current.calls
+
+            // Check if any call is a UI action tool — if so, return it immediately
+            // so the main loop handles it as a single-step action
+            val uiCall = toolCalls.firstOrNull { it.toolName.startsWith("ui_") }
+            if (uiCall != null) {
+                return LLMResponse.UIActionToolCall(uiCall)
+            }
+
             val results = mutableListOf<ToolResult>()
 
             for (call in toolCalls) {
@@ -422,10 +485,7 @@ class AgentKernel(
                     // Add initial system + user messages
                     conversationHistory.add(JSONObject().apply {
                         put("role", "system")
-                        put("content", SystemPrompts.SYSTEM_PROMPT + "\n\n" +
-                                "You also have access to tools. Use them when you need factual information " +
-                                "(time, weather, calculations, device info) instead of navigating the UI to find it. " +
-                                "For UI navigation tasks, respond with a JSON action object as usual.")
+                        put("content", SystemPrompts.TOOL_CALLING_SYSTEM_PROMPT)
                     })
                     conversationHistory.add(JSONObject().apply {
                         put("role", "user")
@@ -632,6 +692,49 @@ class AgentKernel(
             }
         }
         return null
+    }
+
+    /**
+     * Map a ui_* tool name to the legacy action name for logging/history.
+     * e.g., "ui_tap" → "tap", "ui_open_app" → "open"
+     */
+    private fun mapToolNameToAction(toolName: String): String {
+        return when (toolName) {
+            "ui_tap" -> "tap"
+            "ui_type" -> "type"
+            "ui_enter" -> "enter"
+            "ui_swipe" -> "swipe"
+            "ui_back" -> "back"
+            "ui_home" -> "home"
+            "ui_open_app" -> "open"
+            "ui_long_press" -> "long"
+            "ui_open_url" -> "url"
+            "ui_web_search" -> "search"
+            "ui_open_notifications" -> "notif"
+            "ui_open_quick_settings" -> "quick"
+            "ui_wait" -> "wait"
+            "ui_done" -> "done"
+            else -> toolName.removePrefix("ui_")
+        }
+    }
+
+    /**
+     * Extract a human-readable target from a tool call's arguments for history/logging.
+     */
+    private fun extractTargetFromToolCall(call: ToolCall): String? {
+        return when (call.toolName) {
+            "ui_tap", "ui_long_press" -> {
+                val index = (call.arguments["index"] as? Number)?.toInt()
+                index?.let { screenParser.getElementLabel(it) }
+            }
+            "ui_type" -> call.arguments["text"]?.toString()
+            "ui_open_app" -> call.arguments["app_name"]?.toString()
+            "ui_open_url" -> call.arguments["url"]?.toString()
+            "ui_web_search" -> call.arguments["query"]?.toString()
+            "ui_swipe" -> call.arguments["direction"]?.toString()
+            "ui_done" -> call.arguments["reason"]?.toString()
+            else -> null
+        }
     }
 
     private fun heuristicDecision(text: String): Decision {

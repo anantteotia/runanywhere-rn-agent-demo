@@ -76,10 +76,7 @@ class GPTClient(
         } else {
             // First turn: system + user messages
             messages.put(JSONObject().put("role", "system").put("content",
-                SystemPrompts.SYSTEM_PROMPT + "\n\n" +
-                "You also have access to tools. Use them when you need factual information " +
-                "(time, weather, calculations, device info) instead of navigating the UI to find it. " +
-                "For UI navigation tasks, respond with a JSON action object as usual."
+                SystemPrompts.TOOL_CALLING_SYSTEM_PROMPT
             ))
             messages.put(JSONObject().put("role", "user").put("content", prompt))
         }
@@ -91,6 +88,7 @@ class GPTClient(
             put("messages", messages)
             if (tools.isNotEmpty()) {
                 put("tools", ToolPromptFormatter.toOpenAIFormat(tools))
+                put("parallel_tool_calls", false)
             }
         }
 
@@ -137,10 +135,7 @@ class GPTClient(
             conversationHistory.forEach { messages.put(it) }
         } else {
             messages.put(JSONObject().put("role", "system").put("content",
-                SystemPrompts.VISION_SYSTEM_PROMPT + "\n\n" +
-                "You also have access to tools. Use them when you need factual information " +
-                "(time, weather, calculations, device info) instead of navigating the UI to find it. " +
-                "For UI navigation tasks, respond with a JSON action object as usual."
+                SystemPrompts.TOOL_CALLING_VISION_SYSTEM_PROMPT
             ))
 
             // User message with multi-part content: text + image
@@ -170,6 +165,7 @@ class GPTClient(
             put("messages", messages)
             if (tools.isNotEmpty()) {
                 put("tools", ToolPromptFormatter.toOpenAIFormat(tools))
+                put("parallel_tool_calls", false)
             }
         }
 

@@ -33,6 +33,7 @@ data class ToolResult(
 
 sealed class LLMResponse {
     data class UIAction(val json: String) : LLMResponse()
+    data class UIActionToolCall(val call: ToolCall) : LLMResponse()
     data class ToolCalls(val calls: List<ToolCall>) : LLMResponse()
     data class TextAnswer(val text: String) : LLMResponse()
     data class Error(val message: String) : LLMResponse()
