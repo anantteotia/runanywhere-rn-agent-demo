@@ -5,6 +5,14 @@ import android.util.Log
 import com.runanywhere.agent.AgentApplication
 import com.runanywhere.agent.BuildConfig
 import com.runanywhere.agent.accessibility.AgentAccessibilityService
+import com.runanywhere.agent.toolcalling.BuiltInTools
+import com.runanywhere.agent.toolcalling.LLMResponse
+import com.runanywhere.agent.toolcalling.ToolCallParser
+import com.runanywhere.agent.toolcalling.ToolDefinition
+import com.runanywhere.agent.toolcalling.ToolHandler
+import com.runanywhere.agent.toolcalling.ToolPromptFormatter
+import com.runanywhere.agent.toolcalling.ToolRegistry
+import com.runanywhere.agent.toolcalling.ToolResult
 import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.extensions.LLM.LLMGenerationOptions
 import com.runanywhere.sdk.public.extensions.LLM.StructuredOutputConfig
@@ -30,6 +38,7 @@ class AgentKernel(
         private const val MAX_STEPS = 20
         private const val MAX_DURATION_MS = 120_000L
         private const val STEP_DELAY_MS = 2000L
+        private const val MAX_TOOL_ITERATIONS = 5
     }
 
     private val history = ActionHistory()
@@ -45,15 +54,26 @@ class AgentKernel(
         onLog = onLog
     )
 
+    private val toolRegistry = ToolRegistry().also { registry ->
+        BuiltInTools.registerAll(registry, context)
+    }
+
     private var activeModelId: String = AgentApplication.DEFAULT_MODEL
     private var isRunning = false
     private var planResult: PlanResult? = null
+
+    // Tracks the last prompt for local model tool result re-injection
+    private var lastPrompt: String = ""
 
     fun setModel(modelId: String) {
         activeModelId = modelId
     }
 
     fun getModel(): String = activeModelId
+
+    fun registerTool(definition: ToolDefinition, handler: ToolHandler) {
+        toolRegistry.register(definition, handler)
+    }
 
     sealed class AgentEvent {
         data class Log(val message: String) : AgentEvent()
@@ -91,6 +111,11 @@ class AgentKernel(
                 }
             } else {
                 emit(AgentEvent.Log("GPT-4o API key missing. Skipping planning."))
+            }
+
+            val toolCount = toolRegistry.getDefinitions().size
+            if (toolCount > 0) {
+                emit(AgentEvent.Log("$toolCount tools registered"))
             }
 
             // Ensure model is ready
@@ -136,16 +161,38 @@ class AgentKernel(
                     }
                 }
 
-                val decisionJson = if (gptClient.isConfigured()) {
+                lastPrompt = prompt
+
+                // Get LLM response (with tool calling support)
+                val response = if (gptClient.isConfigured()) {
                     emit(AgentEvent.Log("Using GPT-4o..."))
-                    callRemoteLLM(prompt) ?: run {
+                    callRemoteLLMWithTools(prompt) ?: run {
                         emit(AgentEvent.Log("GPT-4o unavailable, falling back to local model"))
-                        callLocalLLM(prompt)
+                        callLocalLLMWithTools(prompt)
                     }
                 } else {
-                    callLocalLLM(prompt)
+                    callLocalLLMWithTools(prompt)
                 }
-                val decision = parseDecision(decisionJson)
+
+                // Resolve any tool calls (sub-loop)
+                val finalResponse = resolveToolCalls(response, prompt) { event -> emit(event) }
+
+                val decision = when (finalResponse) {
+                    is LLMResponse.UIAction -> parseDecision(finalResponse.json)
+                    is LLMResponse.TextAnswer -> {
+                        emit(AgentEvent.Log("LLM answer: ${finalResponse.text}"))
+                        // Try to extract a decision from the text answer
+                        tryExtractDecisionFromText(finalResponse.text) ?: Decision("wait")
+                    }
+                    is LLMResponse.Error -> {
+                        emit(AgentEvent.Log("LLM error: ${finalResponse.message}"))
+                        Decision("wait")
+                    }
+                    is LLMResponse.ToolCalls -> {
+                        emit(AgentEvent.Log("Unresolved tool calls after max iterations"))
+                        Decision("wait")
+                    }
+                }
 
                 emit(AgentEvent.Log("Action: ${decision.action}"))
 
@@ -194,6 +241,179 @@ class AgentKernel(
         isRunning = false
     }
 
+    // ========== Tool Calling Integration ==========
+
+    private suspend fun callRemoteLLMWithTools(prompt: String): LLMResponse? {
+        val tools = toolRegistry.getDefinitions()
+        return if (tools.isNotEmpty()) {
+            gptClient.generateActionWithTools(prompt, tools)
+        } else {
+            // No tools registered, use existing path
+            val json = gptClient.generateAction(prompt) ?: return null
+            LLMResponse.UIAction(json)
+        }
+    }
+
+    private suspend fun callLocalLLMWithTools(prompt: String): LLMResponse {
+        val tools = toolRegistry.getDefinitions()
+        val hasTools = tools.isNotEmpty()
+
+        val options = if (hasTools) {
+            // When tools are registered: more tokens, no structured output
+            // (grammar enforcement would block <tool_call> tags)
+            LLMGenerationOptions(
+                maxTokens = 128,
+                temperature = 0.0f,
+                topP = 0.95f,
+                streamingEnabled = false,
+                systemPrompt = null,
+                structuredOutput = null
+            )
+        } else {
+            // No tools: existing behavior with structured output
+            LLMGenerationOptions(
+                maxTokens = 32,
+                temperature = 0.0f,
+                topP = 0.95f,
+                streamingEnabled = false,
+                systemPrompt = null,
+                structuredOutput = StructuredOutputConfig(
+                    typeName = "Act",
+                    includeSchemaInPrompt = true,
+                    jsonSchema = SystemPrompts.DECISION_SCHEMA
+                )
+            )
+        }
+
+        val fullPrompt = if (hasTools) {
+            prompt + SystemPrompts.TOOL_AWARE_ADDENDUM +
+                    ToolPromptFormatter.formatForLocalPrompt(tools)
+        } else {
+            prompt
+        }
+
+        return try {
+            val result = withContext(Dispatchers.Default) {
+                RunAnywhere.generate(fullPrompt, options)
+            }
+            val text = result.text
+
+            // Check for tool calls first (only when tools are registered)
+            if (hasTools && ToolCallParser.containsToolCall(text)) {
+                val calls = ToolCallParser.parse(text)
+                if (calls.isNotEmpty()) {
+                    return LLMResponse.ToolCalls(calls)
+                }
+            }
+
+            // Otherwise treat as UI action
+            LLMResponse.UIAction(text)
+        } catch (e: Exception) {
+            Log.e(TAG, "LLM call failed: ${e.message}", e)
+            LLMResponse.UIAction("{\"a\":\"done\"}")
+        }
+    }
+
+    /**
+     * Resolve tool calls in a sub-loop: execute tools, feed results back, repeat.
+     * Returns the final non-tool-call response.
+     */
+    private suspend fun resolveToolCalls(
+        initialResponse: LLMResponse,
+        originalPrompt: String,
+        emitEvent: suspend (AgentEvent) -> Unit
+    ): LLMResponse {
+        var current = initialResponse
+        var iterations = 0
+
+        // For GPT-4o multi-turn: maintain conversation history
+        val conversationHistory = mutableListOf<JSONObject>()
+        var historyInitialized = false
+
+        while (current is LLMResponse.ToolCalls && iterations < MAX_TOOL_ITERATIONS) {
+            iterations++
+            val toolCalls = current.calls
+            val results = mutableListOf<ToolResult>()
+
+            for (call in toolCalls) {
+                emitEvent(AgentEvent.Log("Tool call: ${call.toolName}(${call.arguments})"))
+                val result = toolRegistry.execute(call)
+                emitEvent(AgentEvent.Log("Tool result [${call.toolName}]: ${result.result}"))
+                results.add(result)
+
+                // Record in action history
+                history.recordToolCall(
+                    call.toolName,
+                    call.arguments.toString(),
+                    result.result,
+                    !result.isError
+                )
+            }
+
+            // Feed results back to LLM
+            current = if (gptClient.isConfigured()) {
+                // GPT-4o path: build multi-turn conversation history
+                if (!historyInitialized) {
+                    // Add initial system + user messages
+                    conversationHistory.add(JSONObject().apply {
+                        put("role", "system")
+                        put("content", SystemPrompts.SYSTEM_PROMPT + "\n\n" +
+                                "You also have access to tools. Use them when you need factual information " +
+                                "(time, weather, calculations, device info) instead of navigating the UI to find it. " +
+                                "For UI navigation tasks, respond with a JSON action object as usual.")
+                    })
+                    conversationHistory.add(JSONObject().apply {
+                        put("role", "user")
+                        put("content", originalPrompt)
+                    })
+                    historyInitialized = true
+                }
+
+                // Add assistant message with tool calls
+                conversationHistory.add(gptClient.buildAssistantToolCallMessage(toolCalls))
+
+                // Add tool result messages
+                results.forEach { result ->
+                    conversationHistory.add(
+                        gptClient.buildToolResultMessage(result.toolCallId, result.result)
+                    )
+                }
+
+                gptClient.submitToolResults(conversationHistory, toolRegistry.getDefinitions())
+                    ?: LLMResponse.Error("GPT-4o tool result submission failed")
+            } else {
+                // Local model path: append tool results to prompt and re-generate
+                val toolResultText = ToolPromptFormatter.formatToolResults(results)
+                callLocalLLMWithTools(originalPrompt + toolResultText)
+            }
+        }
+
+        if (iterations >= MAX_TOOL_ITERATIONS && current is LLMResponse.ToolCalls) {
+            return LLMResponse.Error("Max tool calling iterations ($MAX_TOOL_ITERATIONS) reached")
+        }
+
+        return current
+    }
+
+    /**
+     * Try to extract a UI action decision from a text answer.
+     * Sometimes the LLM returns a text answer that contains a JSON action.
+     */
+    private fun tryExtractDecisionFromText(text: String): Decision? {
+        val matcher = Pattern.compile("\\{.*?\\}", Pattern.DOTALL).matcher(text)
+        if (matcher.find()) {
+            try {
+                val obj = JSONObject(matcher.group())
+                if (obj.has("action") || obj.has("a")) {
+                    return extractDecision(obj)
+                }
+            } catch (_: JSONException) {}
+        }
+        return null
+    }
+
+    // ========== Existing Methods ==========
+
     private suspend fun ensureModelReady() {
         try {
             RunAnywhere.loadLLMModel(activeModelId)
@@ -209,35 +429,6 @@ class AgentKernel(
             }
             RunAnywhere.loadLLMModel(activeModelId)
         }
-    }
-
-    private suspend fun callLocalLLM(prompt: String): String {
-        val options = LLMGenerationOptions(
-            maxTokens = 32,
-            temperature = 0.0f,
-            topP = 0.95f,
-            streamingEnabled = false,
-            systemPrompt = null,
-            structuredOutput = StructuredOutputConfig(
-                typeName = "Act",
-                includeSchemaInPrompt = true,
-                jsonSchema = SystemPrompts.DECISION_SCHEMA
-            )
-        )
-
-        return try {
-            val result = withContext(Dispatchers.Default) {
-                RunAnywhere.generate(prompt, options)
-            }
-            result.text
-        } catch (e: Exception) {
-            Log.e(TAG, "LLM call failed: ${e.message}", e)
-            "{\"a\":\"done\"}"
-        }
-    }
-
-    private suspend fun callRemoteLLM(prompt: String): String? {
-        return gptClient.generateAction(prompt)
     }
 
     private fun parseDecision(text: String): Decision {
@@ -320,5 +511,4 @@ class AgentKernel(
             else -> Decision("done")
         }
     }
-
 }

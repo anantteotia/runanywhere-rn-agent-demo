@@ -154,4 +154,37 @@ Be specific about what to tap, type, or swipe.
 OUTPUT: {"steps":["step1","step2","step3"],"success_criteria":"how to know task is done"}
         """.trimIndent()
     }
+
+    val TOOL_AWARE_ADDENDUM = """
+
+TOOLS:
+In addition to UI actions, you have access to external tools.
+- If you need factual information (time, weather, calculations, device info), USE A TOOL instead of navigating the UI.
+- To call a tool, output: <tool_call>{"tool":"tool_name","arguments":{"param":"value"}}</tool_call>
+- After a tool returns results, decide your next step: another tool call, a UI action, or "done".
+- IMPORTANT: Only call ONE tool at a time. Wait for the result before proceeding.
+    """.trimIndent()
+
+    fun buildPromptWithToolResults(
+        goal: String,
+        screenState: String,
+        history: String,
+        toolResults: String,
+        lastActionResult: String? = null
+    ): String {
+        val lastResultSection = lastActionResult?.let {
+            "\nLAST_RESULT: $it"
+        } ?: ""
+
+        return """
+GOAL: $goal
+
+SCREEN_ELEMENTS:
+$screenState
+$lastResultSection$history
+$toolResults
+
+Output ONLY a JSON object with your next action OR a <tool_call> if you need information.
+        """.trimIndent()
+    }
 }

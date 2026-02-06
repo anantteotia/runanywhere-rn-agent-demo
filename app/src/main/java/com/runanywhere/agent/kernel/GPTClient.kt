@@ -1,6 +1,10 @@
 package com.runanywhere.agent.kernel
 
 import android.util.Log
+import com.runanywhere.agent.toolcalling.LLMResponse
+import com.runanywhere.agent.toolcalling.ToolCall
+import com.runanywhere.agent.toolcalling.ToolDefinition
+import com.runanywhere.agent.toolcalling.ToolPromptFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -52,6 +56,123 @@ class GPTClient(
             maxTokens = 256
         )
     }
+
+    /**
+     * Send a prompt with tool definitions using OpenAI's native function calling.
+     * Does NOT use response_format: json_object (incompatible with tools).
+     */
+    suspend fun generateActionWithTools(
+        prompt: String,
+        tools: List<ToolDefinition>,
+        conversationHistory: List<JSONObject>? = null
+    ): LLMResponse? {
+        val apiKey = apiKeyProvider()?.takeIf { it.isNotBlank() } ?: return null
+
+        val messages = JSONArray()
+
+        if (conversationHistory != null && conversationHistory.isNotEmpty()) {
+            // Use provided conversation history (for multi-turn tool calling)
+            conversationHistory.forEach { messages.put(it) }
+        } else {
+            // First turn: system + user messages
+            messages.put(JSONObject().put("role", "system").put("content",
+                SystemPrompts.SYSTEM_PROMPT + "\n\n" +
+                "You also have access to tools. Use them when you need factual information " +
+                "(time, weather, calculations, device info) instead of navigating the UI to find it. " +
+                "For UI navigation tasks, respond with a JSON action object as usual."
+            ))
+            messages.put(JSONObject().put("role", "user").put("content", prompt))
+        }
+
+        val payload = JSONObject().apply {
+            put("model", "gpt-4o")
+            put("temperature", 0)
+            put("max_tokens", 512)
+            put("messages", messages)
+            if (tools.isNotEmpty()) {
+                put("tools", ToolPromptFormatter.toOpenAIFormat(tools))
+            }
+        }
+
+        val request = Request.Builder()
+            .url(API_URL)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", JSON_MEDIA.toString())
+            .post(payload.toString().toRequestBody(JSON_MEDIA))
+            .build()
+
+        return try {
+            val response = withContext(Dispatchers.IO) { client.newCall(request).execute() }
+            val body = response.body?.string()
+            if (!response.isSuccessful) {
+                val err = body ?: response.message
+                Log.e(TAG, "GPT tool call failed: ${response.code} $err")
+                onLog("GPT-4o error ${response.code}")
+                null
+            } else {
+                body?.let { extractLLMResponse(it) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "GPT tool request error: ${e.message}", e)
+            onLog("GPT-4o request failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Submit tool results back to GPT-4o for a follow-up response.
+     * The conversationHistory should contain the full message chain including
+     * the assistant message with tool_calls and tool role result messages.
+     */
+    suspend fun submitToolResults(
+        conversationHistory: List<JSONObject>,
+        tools: List<ToolDefinition>
+    ): LLMResponse? {
+        return generateActionWithTools(
+            prompt = "", // not used when conversationHistory is provided
+            tools = tools,
+            conversationHistory = conversationHistory
+        )
+    }
+
+    /**
+     * Build the assistant message JSON for a tool_calls response.
+     * Used to construct conversation history for multi-turn tool calling.
+     */
+    fun buildAssistantToolCallMessage(toolCalls: List<ToolCall>): JSONObject {
+        val toolCallsArray = JSONArray()
+        toolCalls.forEach { call ->
+            val argsJson = JSONObject()
+            call.arguments.forEach { (key, value) ->
+                argsJson.put(key, value)
+            }
+            toolCallsArray.put(JSONObject().apply {
+                put("id", call.id)
+                put("type", "function")
+                put("function", JSONObject().apply {
+                    put("name", call.toolName)
+                    put("arguments", argsJson.toString())
+                })
+            })
+        }
+        return JSONObject().apply {
+            put("role", "assistant")
+            put("tool_calls", toolCallsArray)
+        }
+    }
+
+    /**
+     * Build a tool result message for the conversation history.
+     */
+    fun buildToolResultMessage(toolCallId: String, result: String): JSONObject {
+        return JSONObject().apply {
+            put("role", "tool")
+            put("tool_call_id", toolCallId)
+            put("content", result)
+        }
+    }
+
+    // ---- Existing private methods ----
 
     private suspend fun request(systemPrompt: String, userPrompt: String, maxTokens: Int): String? {
         val apiKey = apiKeyProvider()?.takeIf { it.isNotBlank() } ?: return null
@@ -109,6 +230,63 @@ class GPTClient(
                 }
             }.trim()
             else -> message.optString("content").trim()
+        }
+    }
+
+    /**
+     * Parse GPT-4o response into an LLMResponse, handling both tool_calls and content.
+     */
+    private fun extractLLMResponse(body: String): LLMResponse {
+        val json = JSONObject(body)
+        val choices = json.optJSONArray("choices")
+        if (choices == null || choices.length() == 0) {
+            return LLMResponse.Error("No choices in GPT response")
+        }
+        val message = choices.optJSONObject(0)?.optJSONObject("message")
+            ?: return LLMResponse.Error("No message in GPT response")
+
+        // Check for tool calls first
+        val toolCallsArray = message.optJSONArray("tool_calls")
+        if (toolCallsArray != null && toolCallsArray.length() > 0) {
+            val calls = mutableListOf<ToolCall>()
+            for (i in 0 until toolCallsArray.length()) {
+                val tc = toolCallsArray.getJSONObject(i)
+                val id = tc.getString("id")
+                val function = tc.getJSONObject("function")
+                val name = function.getString("name")
+                val argsStr = function.getString("arguments")
+                val argsObj = try { JSONObject(argsStr) } catch (_: Exception) { JSONObject() }
+                val args = mutableMapOf<String, Any?>()
+                val keys = argsObj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next()
+                    args[key] = argsObj.opt(key)
+                }
+                calls.add(ToolCall(id = id, toolName = name, arguments = args))
+            }
+            return LLMResponse.ToolCalls(calls)
+        }
+
+        // No tool calls -- extract content
+        val content = message.optString("content", "").trim()
+        if (content.isEmpty()) {
+            return LLMResponse.Error("Empty response from GPT")
+        }
+
+        // Determine if it's a UI action JSON or a text answer
+        return try {
+            val cleaned = content
+                .replace("```json", "")
+                .replace("```", "")
+                .trim()
+            val obj = JSONObject(cleaned)
+            if (obj.has("action") || obj.has("a")) {
+                LLMResponse.UIAction(cleaned)
+            } else {
+                LLMResponse.TextAnswer(content)
+            }
+        } catch (_: JSONException) {
+            LLMResponse.TextAnswer(content)
         }
     }
 

@@ -61,4 +61,15 @@ class ActionHistory {
     }
 
     fun size(): Int = history.size
+
+    fun recordToolCall(toolName: String, arguments: String, result: String, success: Boolean) {
+        stepCounter++
+        history.add(ActionRecord(
+            step = stepCounter,
+            action = "tool:$toolName",
+            target = arguments,
+            result = result,
+            success = success
+        ))
+    }
 }
