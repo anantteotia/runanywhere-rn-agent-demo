@@ -120,6 +120,108 @@ class GPTClient(
     }
 
     /**
+     * Send a prompt with a screenshot image to GPT-4o vision.
+     * Uses multi-part content format: [text, image_url].
+     */
+    suspend fun generateActionWithVision(
+        prompt: String,
+        screenshotBase64: String,
+        tools: List<ToolDefinition>,
+        conversationHistory: List<JSONObject>? = null
+    ): LLMResponse? {
+        val apiKey = apiKeyProvider()?.takeIf { it.isNotBlank() } ?: return null
+
+        val messages = JSONArray()
+
+        if (conversationHistory != null && conversationHistory.isNotEmpty()) {
+            conversationHistory.forEach { messages.put(it) }
+        } else {
+            messages.put(JSONObject().put("role", "system").put("content",
+                SystemPrompts.VISION_SYSTEM_PROMPT + "\n\n" +
+                "You also have access to tools. Use them when you need factual information " +
+                "(time, weather, calculations, device info) instead of navigating the UI to find it. " +
+                "For UI navigation tasks, respond with a JSON action object as usual."
+            ))
+
+            // User message with multi-part content: text + image
+            val contentArray = JSONArray().apply {
+                put(JSONObject().apply {
+                    put("type", "text")
+                    put("text", prompt)
+                })
+                put(JSONObject().apply {
+                    put("type", "image_url")
+                    put("image_url", JSONObject().apply {
+                        put("url", "data:image/jpeg;base64,$screenshotBase64")
+                        put("detail", "low")
+                    })
+                })
+            }
+            messages.put(JSONObject().apply {
+                put("role", "user")
+                put("content", contentArray)
+            })
+        }
+
+        val payload = JSONObject().apply {
+            put("model", "gpt-4o")
+            put("temperature", 0)
+            put("max_tokens", 512)
+            put("messages", messages)
+            if (tools.isNotEmpty()) {
+                put("tools", ToolPromptFormatter.toOpenAIFormat(tools))
+            }
+        }
+
+        val request = Request.Builder()
+            .url(API_URL)
+            .header("Authorization", "Bearer $apiKey")
+            .header("Content-Type", JSON_MEDIA.toString())
+            .post(payload.toString().toRequestBody(JSON_MEDIA))
+            .build()
+
+        return try {
+            val response = withContext(Dispatchers.IO) { client.newCall(request).execute() }
+            val body = response.body?.string()
+            if (!response.isSuccessful) {
+                val err = body ?: response.message
+                Log.e(TAG, "GPT vision failed: ${response.code} $err")
+                onLog("GPT-4o vision error ${response.code}")
+                null
+            } else {
+                body?.let { extractLLMResponse(it) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "GPT vision error: ${e.message}", e)
+            onLog("GPT-4o vision failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Build a user message with vision content for conversation history.
+     */
+    fun buildUserVisionMessage(prompt: String, screenshotBase64: String): JSONObject {
+        val contentArray = JSONArray().apply {
+            put(JSONObject().apply {
+                put("type", "text")
+                put("text", prompt)
+            })
+            put(JSONObject().apply {
+                put("type", "image_url")
+                put("image_url", JSONObject().apply {
+                    put("url", "data:image/jpeg;base64,$screenshotBase64")
+                    put("detail", "low")
+                })
+            })
+        }
+        return JSONObject().apply {
+            put("role", "user")
+            put("content", contentArray)
+        }
+    }
+
+    /**
      * Submit tool results back to GPT-4o for a follow-up response.
      * The conversationHistory should contain the full message chain including
      * the assistant message with tool_calls and tool role result messages.

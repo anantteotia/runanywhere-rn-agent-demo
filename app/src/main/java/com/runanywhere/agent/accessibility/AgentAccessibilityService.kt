@@ -13,9 +13,12 @@ import android.provider.Settings
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import kotlin.coroutines.resume
 
 class AgentAccessibilityService : AccessibilityService() {
 
@@ -81,7 +84,7 @@ class AgentAccessibilityService : AccessibilityService() {
         val indexToCoords: Map<Int, Pair<Int, Int>>
     )
 
-    fun getScreenState(maxElements: Int = 12, maxTextLength: Int = 20): ScreenState {
+    fun getScreenState(maxElements: Int = 30, maxTextLength: Int = 50): ScreenState {
         val root = rootInActiveWindow ?: return ScreenState("", emptyList(), emptyMap())
         val elements = mutableListOf<ScreenElement>()
         val indexToCoords = mutableMapOf<Int, Pair<Int, Int>>()
@@ -296,6 +299,69 @@ class AgentAccessibilityService : AccessibilityService() {
             )
         } else {
             callback(false)
+        }
+    }
+
+    /**
+     * Capture screenshot and return as base64-encoded JPEG string.
+     * Resizes to half resolution and compresses as JPEG at 60% quality.
+     */
+    suspend fun captureScreenshotBase64(): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+
+        return suspendCancellableCoroutine { cont ->
+            takeScreenshot(
+                android.view.Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        try {
+                            val hardwareBitmap = Bitmap.wrapHardwareBuffer(
+                                screenshot.hardwareBuffer,
+                                screenshot.colorSpace
+                            )
+                            screenshot.hardwareBuffer.close()
+
+                            if (hardwareBitmap == null) {
+                                cont.resume(null)
+                                return
+                            }
+
+                            // Hardware bitmaps can't be manipulated directly
+                            val softBitmap = hardwareBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                            hardwareBitmap.recycle()
+
+                            // Resize to half resolution
+                            val scaled = Bitmap.createScaledBitmap(
+                                softBitmap,
+                                softBitmap.width / 2,
+                                softBitmap.height / 2,
+                                true
+                            )
+                            softBitmap.recycle()
+
+                            // Compress to JPEG at 60% quality
+                            val baos = ByteArrayOutputStream()
+                            scaled.compress(Bitmap.CompressFormat.JPEG, 60, baos)
+                            scaled.recycle()
+
+                            val base64 = android.util.Base64.encodeToString(
+                                baos.toByteArray(),
+                                android.util.Base64.NO_WRAP
+                            )
+                            cont.resume(base64)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Screenshot base64 failed: ${e.message}")
+                            cont.resume(null)
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        Log.e(TAG, "Screenshot capture failed: $errorCode")
+                        cont.resume(null)
+                    }
+                }
+            )
         }
     }
 

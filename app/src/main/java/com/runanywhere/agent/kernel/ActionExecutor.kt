@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import com.runanywhere.agent.accessibility.AgentAccessibilityService
+import com.runanywhere.agent.actions.AppActions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.File
@@ -21,11 +22,12 @@ class ActionExecutor(
 
     suspend fun execute(decision: Decision, indexToCoords: Map<Int, Pair<Int, Int>>): ExecutionResult {
         val service = accessibilityService()
-        if (service == null && decision.action !in listOf("url", "search", "done", "wait")) {
+        if (service == null && decision.action !in listOf("open", "url", "search", "done", "wait")) {
             return ExecutionResult(false, "Accessibility service not connected")
         }
 
         return when (decision.action) {
+            "open" -> executeOpenApp(decision)
             "tap" -> executeTap(service!!, decision, indexToCoords)
             "type" -> executeType(service!!, decision)
             "enter" -> executeEnter(service!!)
@@ -184,6 +186,33 @@ class ActionExecutor(
                 }
             }
         }
+    }
+
+    private fun executeOpenApp(decision: Decision): ExecutionResult {
+        val appName = decision.text ?: return ExecutionResult(false, "No app name provided")
+        onLog("Opening app: $appName")
+
+        // Try known app shortcuts first for reliability
+        val appLower = appName.lowercase()
+        val success = when {
+            appLower.contains("youtube") -> AppActions.openApp(context, AppActions.Packages.YOUTUBE)
+            appLower.contains("chrome") -> AppActions.openApp(context, AppActions.Packages.CHROME)
+            appLower.contains("whatsapp") -> AppActions.openApp(context, AppActions.Packages.WHATSAPP)
+            appLower.contains("gmail") || appLower.contains("email") -> AppActions.openApp(context, AppActions.Packages.GMAIL)
+            appLower.contains("maps") || appLower.contains("map") -> AppActions.openApp(context, AppActions.Packages.MAPS)
+            appLower.contains("spotify") -> AppActions.openApp(context, AppActions.Packages.SPOTIFY)
+            appLower.contains("clock") || appLower.contains("timer") || appLower.contains("alarm") -> AppActions.openClock(context)
+            appLower.contains("camera") -> AppActions.openCamera(context)
+            appLower.contains("phone") || appLower.contains("dialer") -> AppActions.openApp(context, AppActions.Packages.PHONE)
+            appLower.contains("messages") || appLower.contains("sms") -> AppActions.openApp(context, AppActions.Packages.MESSAGES)
+            appLower.contains("setting") -> {
+                openSettings()
+                true
+            }
+            else -> openApp(appName) // Generic fallback
+        }
+
+        return ExecutionResult(success, if (success) "Opened $appName" else "Failed to open $appName")
     }
 
     private suspend fun executeWait(): ExecutionResult {

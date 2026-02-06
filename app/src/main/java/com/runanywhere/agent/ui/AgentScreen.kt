@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Mic
@@ -20,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -106,38 +108,73 @@ fun AgentScreen(viewModel: AgentViewModel) {
                 }
             }
 
-            // Model Selector
-            ModelSelector(
-                models = uiState.availableModels.map { it.name },
-                selectedIndex = uiState.selectedModelIndex,
-                onSelect = viewModel::setModel,
-                enabled = uiState.status != AgentViewModel.Status.RUNNING
-            )
-
-            // Goal Input with Mic Button
-            OutlinedTextField(
-                value = uiState.goal,
-                onValueChange = viewModel::setGoal,
-                label = { Text("Enter your goal") },
-                placeholder = { Text("e.g., 'Play lofi music on YouTube'") },
+            // Voice Mode Toggle + Model Selector
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                enabled = uiState.status != AgentViewModel.Status.RUNNING &&
-                        !uiState.isRecording && !uiState.isTranscribing,
-                minLines = 2,
-                maxLines = 4,
-                trailingIcon = {
-                    MicButton(
-                        isRecording = uiState.isRecording,
-                        isTranscribing = uiState.isTranscribing,
-                        isSTTModelLoading = uiState.isSTTModelLoading,
-                        isAgentRunning = uiState.status == AgentViewModel.Status.RUNNING,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                ModelSelector(
+                    models = uiState.availableModels.map { it.name },
+                    selectedIndex = uiState.selectedModelIndex,
+                    onSelect = viewModel::setModel,
+                    enabled = uiState.status != AgentViewModel.Status.RUNNING,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "Voice",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Switch(
+                        checked = uiState.isVoiceMode,
+                        onCheckedChange = { viewModel.toggleVoiceMode() },
+                        enabled = uiState.status != AgentViewModel.Status.RUNNING
+                    )
+                }
+            }
+
+            if (uiState.isVoiceMode) {
+                // ===== Voice Mode UI =====
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Status text
+                    val voiceStatusText = when {
+                        uiState.status == AgentViewModel.Status.RUNNING -> "Working..."
+                        uiState.isTranscribing -> "Transcribing..."
+                        uiState.isRecording -> "Listening..."
+                        uiState.isSTTModelLoading -> "Loading voice model..."
+                        uiState.goal.isNotBlank() && uiState.status == AgentViewModel.Status.DONE -> "Done: \"${uiState.goal}\""
+                        uiState.goal.isNotBlank() -> "\"${uiState.goal}\""
+                        else -> "Tap the mic to speak"
+                    }
+                    Text(
+                        text = voiceStatusText,
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Large Mic Button
+                    val micEnabled = !uiState.isTranscribing &&
+                            !uiState.isSTTModelLoading &&
+                            uiState.status != AgentViewModel.Status.RUNNING
+
+                    FilledIconButton(
                         onClick = {
                             if (uiState.isRecording) {
                                 viewModel.stopRecordingAndTranscribe()
                             } else {
                                 if (!hasMicPermission) {
                                     permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                    return@MicButton
+                                    return@FilledIconButton
                                 }
                                 if (!uiState.isSTTModelLoaded && !uiState.isSTTModelLoading) {
                                     viewModel.loadSTTModelIfNeeded()
@@ -146,53 +183,144 @@ fun AgentScreen(viewModel: AgentViewModel) {
                                     viewModel.startRecording()
                                 }
                             }
-                        }
-                    )
-                }
-            )
-
-            // STT model loading progress
-            if (uiState.isSTTModelLoading) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    LinearProgressIndicator(
-                        progress = uiState.sttDownloadProgress,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = "${(uiState.sttDownloadProgress * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-            }
-
-            // Control Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = viewModel::startAgent,
-                    modifier = Modifier.weight(1f),
-                    enabled = uiState.status != AgentViewModel.Status.RUNNING &&
-                            uiState.isServiceEnabled &&
-                            uiState.goal.isNotBlank()
-                ) {
-                    Text("Start Agent")
-                }
-
-                if (uiState.status == AgentViewModel.Status.RUNNING) {
-                    Button(
-                        onClick = viewModel::stopAgent,
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.error
+                        },
+                        enabled = micEnabled,
+                        modifier = Modifier.size(80.dp),
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = if (uiState.isRecording)
+                                MaterialTheme.colorScheme.error
+                            else
+                                MaterialTheme.colorScheme.primary
                         )
                     ) {
-                        Text("Stop")
+                        when {
+                            uiState.isTranscribing -> CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            uiState.isRecording -> Icon(
+                                imageVector = Icons.Rounded.Stop,
+                                contentDescription = "Stop recording",
+                                modifier = Modifier.size(36.dp),
+                                tint = MaterialTheme.colorScheme.onError
+                            )
+                            else -> Icon(
+                                imageVector = Icons.Rounded.Mic,
+                                contentDescription = "Start recording",
+                                modifier = Modifier.size(36.dp),
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                    }
+
+                    // STT model loading progress
+                    if (uiState.isSTTModelLoading) {
+                        LinearProgressIndicator(
+                            progress = uiState.sttDownloadProgress,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 32.dp),
+                        )
+                    }
+
+                    // Stop button when running
+                    if (uiState.status == AgentViewModel.Status.RUNNING) {
+                        Button(
+                            onClick = viewModel::stopAgent,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Stop Agent")
+                        }
+                    }
+                }
+            } else {
+                // ===== Text Mode UI (existing) =====
+
+                // Goal Input with Mic Button
+                OutlinedTextField(
+                    value = uiState.goal,
+                    onValueChange = viewModel::setGoal,
+                    label = { Text("Enter your goal") },
+                    placeholder = { Text("e.g., 'Play lofi music on YouTube'") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = uiState.status != AgentViewModel.Status.RUNNING &&
+                            !uiState.isRecording && !uiState.isTranscribing,
+                    minLines = 2,
+                    maxLines = 4,
+                    trailingIcon = {
+                        MicButton(
+                            isRecording = uiState.isRecording,
+                            isTranscribing = uiState.isTranscribing,
+                            isSTTModelLoading = uiState.isSTTModelLoading,
+                            isAgentRunning = uiState.status == AgentViewModel.Status.RUNNING,
+                            onClick = {
+                                if (uiState.isRecording) {
+                                    viewModel.stopRecordingAndTranscribe()
+                                } else {
+                                    if (!hasMicPermission) {
+                                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                        return@MicButton
+                                    }
+                                    if (!uiState.isSTTModelLoaded && !uiState.isSTTModelLoading) {
+                                        viewModel.loadSTTModelIfNeeded()
+                                    }
+                                    if (uiState.isSTTModelLoaded) {
+                                        viewModel.startRecording()
+                                    }
+                                }
+                            }
+                        )
+                    }
+                )
+
+                // STT model loading progress
+                if (uiState.isSTTModelLoading) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = uiState.sttDownloadProgress,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = "${(uiState.sttDownloadProgress * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+
+                // Control Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = viewModel::startAgent,
+                        modifier = Modifier.weight(1f),
+                        enabled = uiState.status != AgentViewModel.Status.RUNNING &&
+                                uiState.isServiceEnabled &&
+                                uiState.goal.isNotBlank()
+                    ) {
+                        Text("Start Agent")
+                    }
+
+                    if (uiState.status == AgentViewModel.Status.RUNNING) {
+                        Button(
+                            onClick = viewModel::stopAgent,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("Stop")
+                        }
                     }
                 }
             }

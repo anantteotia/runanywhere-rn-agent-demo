@@ -11,11 +11,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.runanywhere.agent.accessibility.AgentAccessibilityService
 import com.runanywhere.agent.kernel.AgentKernel
+import com.runanywhere.agent.tts.TTSManager
 import com.runanywhere.sdk.public.RunAnywhere
 import com.runanywhere.sdk.public.extensions.downloadModel
 import com.runanywhere.sdk.public.extensions.loadSTTModel
 import com.runanywhere.sdk.public.extensions.transcribe
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,7 +50,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         val isTranscribing: Boolean = false,
         val isSTTModelLoaded: Boolean = false,
         val isSTTModelLoading: Boolean = false,
-        val sttDownloadProgress: Float = 0f
+        val sttDownloadProgress: Float = 0f,
+        val isVoiceMode: Boolean = false,
+        val isSpeaking: Boolean = false
     )
 
     private val _uiState = MutableStateFlow(UiState())
@@ -58,6 +62,11 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         context = application,
         onLog = { log -> addLog(log) }
     )
+
+    private val ttsManager = TTSManager(application)
+
+    // Agent job
+    private var agentJob: Job? = null
 
     // Audio recording state
     private var audioRecord: AudioRecord? = null
@@ -92,6 +101,10 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun toggleVoiceMode() {
+        _uiState.value = _uiState.value.copy(isVoiceMode = !_uiState.value.isVoiceMode)
+    }
+
     fun startAgent() {
         val goal = _uiState.value.goal.trim()
         if (goal.isEmpty()) {
@@ -109,7 +122,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
             logs = listOf("Starting: $goal")
         )
 
-        viewModelScope.launch {
+        agentJob = viewModelScope.launch {
             agentKernel.run(goal).collect { event ->
                 when (event) {
                     is AgentKernel.AgentEvent.Log -> addLog(event.message)
@@ -122,6 +135,11 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                         addLog("ERROR: ${event.message}")
                         _uiState.value = _uiState.value.copy(status = Status.ERROR)
                     }
+                    is AgentKernel.AgentEvent.Speak -> {
+                        if (_uiState.value.isVoiceMode) {
+                            ttsManager.speak(event.text)
+                        }
+                    }
                 }
             }
         }
@@ -129,6 +147,9 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopAgent() {
         agentKernel.stop()
+        agentJob?.cancel()
+        agentJob = null
+        ttsManager.stop()
         addLog("Agent stopped")
         _uiState.value = _uiState.value.copy(status = Status.IDLE)
     }
@@ -266,7 +287,14 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
                         goal = result.trim(),
                         isTranscribing = false
                     )
+                    // Auto-start agent in voice mode
+                    if (_uiState.value.isVoiceMode) {
+                        startAgent()
+                    }
                 } else {
+                    if (_uiState.value.isVoiceMode) {
+                        ttsManager.speak("I didn't catch that.")
+                    }
                     addLog("No speech detected")
                     _uiState.value = _uiState.value.copy(isTranscribing = false)
                 }
@@ -280,6 +308,8 @@ class AgentViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         super.onCleared()
+        // Clean up TTS
+        ttsManager.shutdown()
         // Clean up audio resources
         isCapturing = false
         audioRecord?.let { record ->

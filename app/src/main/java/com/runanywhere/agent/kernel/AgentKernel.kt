@@ -5,6 +5,7 @@ import android.util.Log
 import com.runanywhere.agent.AgentApplication
 import com.runanywhere.agent.BuildConfig
 import com.runanywhere.agent.accessibility.AgentAccessibilityService
+import com.runanywhere.agent.actions.AppActions
 import com.runanywhere.agent.toolcalling.BuiltInTools
 import com.runanywhere.agent.toolcalling.LLMResponse
 import com.runanywhere.agent.toolcalling.ToolCallParser
@@ -35,9 +36,9 @@ class AgentKernel(
 ) {
     companion object {
         private const val TAG = "AgentKernel"
-        private const val MAX_STEPS = 20
-        private const val MAX_DURATION_MS = 120_000L
-        private const val STEP_DELAY_MS = 2000L
+        private const val MAX_STEPS = 30
+        private const val MAX_DURATION_MS = 180_000L
+        private const val STEP_DELAY_MS = 1500L
         private const val MAX_TOOL_ITERATIONS = 5
     }
 
@@ -80,6 +81,7 @@ class AgentKernel(
         data class Step(val step: Int, val action: String, val result: String) : AgentEvent()
         data class Done(val message: String) : AgentEvent()
         data class Error(val message: String) : AgentEvent()
+        data class Speak(val text: String) : AgentEvent()
     }
 
     fun run(goal: String): Flow<AgentEvent> = flow {
@@ -94,6 +96,7 @@ class AgentKernel(
 
         try {
             emit(AgentEvent.Log("Starting agent..."))
+            emit(AgentEvent.Speak("Working on it."))
 
             if (gptClient.isConfigured()) {
                 emit(AgentEvent.Log("Requesting GPT-4o plan..."))
@@ -118,6 +121,13 @@ class AgentKernel(
                 emit(AgentEvent.Log("$toolCount tools registered"))
             }
 
+            // Smart pre-launch: open the target app before the agent loop
+            val preLaunchResult = preLaunchApp(goal)
+            if (preLaunchResult != null) {
+                emit(AgentEvent.Log(preLaunchResult))
+                delay(1500) // Wait for app to fully launch
+            }
+
             // Ensure model is ready
             emit(AgentEvent.Log("Loading model: $activeModelId"))
             ensureModelReady()
@@ -126,7 +136,7 @@ class AgentKernel(
             val startTime = System.currentTimeMillis()
             var step = 0
 
-            while (step < MAX_STEPS) {
+            while (step < MAX_STEPS && isRunning) {
                 step++
                 emit(AgentEvent.Log("Step $step/$MAX_STEPS"))
 
@@ -138,6 +148,21 @@ class AgentKernel(
                     continue
                 }
 
+                // Capture screenshot for VLM
+                val screenshotBase64 = try {
+                    AgentAccessibilityService.instance?.captureScreenshotBase64()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Screenshot capture failed: ${e.message}")
+                    null
+                }
+
+                val useVision = screenshotBase64 != null && gptClient.isConfigured()
+                if (useVision) {
+                    emit(AgentEvent.Log("Using VLM (screenshot + elements)"))
+                } else if (screenshotBase64 == null) {
+                    emit(AgentEvent.Log("No screenshot, using text-only mode"))
+                }
+
                 // Get LLM decision with context
                 val historyPrompt = history.formatForPrompt()
                 val lastActionResult = history.getLastActionResult()
@@ -147,28 +172,52 @@ class AgentKernel(
                 val hadFailure = history.hadRecentFailure()
 
                 // Choose appropriate prompt based on context
-                val prompt = when {
-                    loopDetected -> {
-                        emit(AgentEvent.Log("Loop detected, adding recovery prompt"))
-                        SystemPrompts.buildLoopRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                val prompt = if (useVision) {
+                    when {
+                        loopDetected -> {
+                            emit(AgentEvent.Log("Loop detected, adding recovery prompt"))
+                            SystemPrompts.buildVisionLoopRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                        }
+                        hadFailure -> {
+                            emit(AgentEvent.Log("Recent failure, adding recovery hints"))
+                            SystemPrompts.buildVisionFailureRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                        }
+                        else -> {
+                            SystemPrompts.buildVisionPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                        }
                     }
-                    hadFailure -> {
-                        emit(AgentEvent.Log("Recent failure, adding recovery hints"))
-                        SystemPrompts.buildFailureRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
-                    }
-                    else -> {
-                        SystemPrompts.buildPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                } else {
+                    when {
+                        loopDetected -> {
+                            emit(AgentEvent.Log("Loop detected, adding recovery prompt"))
+                            SystemPrompts.buildLoopRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                        }
+                        hadFailure -> {
+                            emit(AgentEvent.Log("Recent failure, adding recovery hints"))
+                            SystemPrompts.buildFailureRecoveryPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                        }
+                        else -> {
+                            SystemPrompts.buildPrompt(goal, screen.compactText, historyPrompt, lastActionResult)
+                        }
                     }
                 }
 
                 lastPrompt = prompt
 
-                // Get LLM response (with tool calling support)
+                // Get LLM response (with tool calling support and optional vision)
                 val response = if (gptClient.isConfigured()) {
-                    emit(AgentEvent.Log("Using GPT-4o..."))
-                    callRemoteLLMWithTools(prompt) ?: run {
-                        emit(AgentEvent.Log("GPT-4o unavailable, falling back to local model"))
-                        callLocalLLMWithTools(prompt)
+                    if (useVision) {
+                        emit(AgentEvent.Log("Calling GPT-4o Vision..."))
+                        callRemoteLLMWithVision(prompt, screenshotBase64!!) ?: run {
+                            emit(AgentEvent.Log("Vision failed, falling back to text-only"))
+                            callRemoteLLMWithTools(prompt) ?: callLocalLLMWithTools(prompt)
+                        }
+                    } else {
+                        emit(AgentEvent.Log("Using GPT-4o..."))
+                        callRemoteLLMWithTools(prompt) ?: run {
+                            emit(AgentEvent.Log("GPT-4o unavailable, falling back to local model"))
+                            callLocalLLMWithTools(prompt)
+                        }
                     }
                 } else {
                     callLocalLLMWithTools(prompt)
@@ -196,6 +245,15 @@ class AgentKernel(
 
                 emit(AgentEvent.Log("Action: ${decision.action}"))
 
+                // Speak key actions
+                when (decision.action) {
+                    "open" -> decision.text?.let { emit(AgentEvent.Speak("Opening $it")) }
+                    "type" -> decision.text?.let {
+                        val preview = if (it.length > 30) it.take(30) + "..." else it
+                        emit(AgentEvent.Speak("Typing $preview"))
+                    }
+                }
+
                 // Execute action
                 val result = actionExecutor.execute(decision, screen.indexToCoords)
                 emit(AgentEvent.Step(step, decision.action, result.message))
@@ -212,6 +270,7 @@ class AgentKernel(
 
                 // Check for completion
                 if (decision.action == "done") {
+                    emit(AgentEvent.Speak("Task complete."))
                     emit(AgentEvent.Done("Goal achieved"))
                     return@flow
                 }
@@ -225,6 +284,7 @@ class AgentKernel(
                 delay(STEP_DELAY_MS)
             }
 
+            emit(AgentEvent.Speak("I've reached the maximum steps."))
             emit(AgentEvent.Done("Max steps reached"))
 
         } catch (e: CancellationException) {
@@ -242,6 +302,11 @@ class AgentKernel(
     }
 
     // ========== Tool Calling Integration ==========
+
+    private suspend fun callRemoteLLMWithVision(prompt: String, screenshotBase64: String): LLMResponse? {
+        val tools = toolRegistry.getDefinitions()
+        return gptClient.generateActionWithVision(prompt, screenshotBase64, tools)
+    }
 
     private suspend fun callRemoteLLMWithTools(prompt: String): LLMResponse? {
         val tools = toolRegistry.getDefinitions()
@@ -479,6 +544,94 @@ class AgentKernel(
             url = obj.optString("url", "").ifEmpty { obj.optString("u") }?.takeIf { it.isNotEmpty() },
             query = obj.optString("query", "").ifEmpty { obj.optString("q") }?.takeIf { it.isNotEmpty() }
         )
+    }
+
+    /**
+     * Pre-launch: analyze the goal and open the target app directly via intent.
+     * Returns a log message if an app was launched, or null if no app was detected.
+     */
+    private fun preLaunchApp(goal: String): String? {
+        val goalLower = goal.lowercase()
+
+        // Map keywords to app launchers
+        val appMatch = when {
+            goalLower.contains("youtube") -> {
+                // Extract search query if present
+                val searchQuery = extractSearchQuery(goalLower, "youtube")
+                if (searchQuery != null) {
+                    AppActions.openYouTubeSearch(context, searchQuery)
+                    return "Pre-launched YouTube with search: $searchQuery"
+                }
+                AppActions.openApp(context, AppActions.Packages.YOUTUBE)
+                "Pre-launched YouTube"
+            }
+            goalLower.contains("chrome") || goalLower.contains("browser") -> {
+                AppActions.openApp(context, AppActions.Packages.CHROME)
+                "Pre-launched Chrome"
+            }
+            goalLower.contains("whatsapp") -> {
+                AppActions.openApp(context, AppActions.Packages.WHATSAPP)
+                "Pre-launched WhatsApp"
+            }
+            goalLower.contains("gmail") -> {
+                AppActions.openApp(context, AppActions.Packages.GMAIL)
+                "Pre-launched Gmail"
+            }
+            goalLower.contains("spotify") -> {
+                val searchQuery = extractSearchQuery(goalLower, "spotify")
+                if (searchQuery != null) {
+                    AppActions.openSpotifySearch(context, searchQuery)
+                    return "Pre-launched Spotify with search: $searchQuery"
+                }
+                AppActions.openApp(context, AppActions.Packages.SPOTIFY)
+                "Pre-launched Spotify"
+            }
+            goalLower.contains("maps") || goalLower.contains("navigate to") || goalLower.contains("directions to") -> {
+                AppActions.openApp(context, AppActions.Packages.MAPS)
+                "Pre-launched Maps"
+            }
+            goalLower.contains("timer") || goalLower.contains("alarm") || goalLower.contains("clock") -> {
+                AppActions.openClock(context)
+                "Pre-launched Clock"
+            }
+            goalLower.contains("camera") || goalLower.contains("photo") || goalLower.contains("picture") -> {
+                AppActions.openCamera(context)
+                "Pre-launched Camera"
+            }
+            goalLower.contains("settings") -> {
+                actionExecutor.openSettings()
+                "Pre-launched Settings"
+            }
+            else -> null
+        }
+
+        return appMatch
+    }
+
+    /**
+     * Try to extract a search query from the goal.
+     * E.g., "open youtube and search for lofi music" -> "lofi music"
+     * E.g., "search for cheap flights on youtube" -> "cheap flights"
+     */
+    private fun extractSearchQuery(goalLower: String, appName: String): String? {
+        // Patterns like "search for X on YouTube", "search X on YouTube"
+        val patterns = listOf(
+            Regex("search\\s+(?:for\\s+)?[\"']?(.+?)[\"']?\\s+on\\s+$appName"),
+            Regex("$appName.*?search\\s+(?:for\\s+)?[\"']?(.+?)(?:[\"']|$)"),
+            Regex("(?:play|find|look\\s+(?:up|for))\\s+[\"']?(.+?)[\"']?\\s+on\\s+$appName"),
+            Regex("$appName.*?(?:play|find|look\\s+(?:up|for))\\s+[\"']?(.+?)(?:[\"']|$)")
+        )
+
+        for (pattern in patterns) {
+            val match = pattern.find(goalLower)
+            if (match != null) {
+                val query = match.groupValues[1]
+                    .replace(Regex("\\s+and\\s+(play|click|tap|open|select).*"), "")
+                    .trim()
+                if (query.isNotEmpty() && query.length > 2) return query
+            }
+        }
+        return null
     }
 
     private fun heuristicDecision(text: String): Decision {

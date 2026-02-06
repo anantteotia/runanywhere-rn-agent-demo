@@ -82,7 +82,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.8.2")
 
     // Jetpack Compose
-    implementation(platform("androidx.compose:compose-bom:2024.01.00"))
+    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
@@ -93,6 +93,9 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // Archive extraction (required by RunAnywhere SDK for model downloads)
+    implementation("org.apache.commons:commons-compress:1.26.0")
 
     // Networking
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
